@@ -20,7 +20,7 @@ try {
   await command('Page.enable'); await command('Runtime.enable');
   await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await command('Page.navigate', { url: `http://127.0.0.1:4173/?qa=${Date.now()}#/home` });
-  await until(`document.querySelector('.hero-image img')?.complete && document.querySelector('.hero-image img')?.naturalWidth>0`);
+  await until(`!!document.querySelector('.home-simple') && document.querySelectorAll('.preview-mode-picker a').length===2`);
   await new Promise((resolve) => setTimeout(resolve, 600)); await screenshot('home-desktop');
   if (await evaluate('document.documentElement.scrollWidth>innerWidth')) throw new Error('Desktop overflow');
   await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

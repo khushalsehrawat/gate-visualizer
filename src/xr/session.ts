@@ -227,7 +227,7 @@ export class XRSessionController {
       const pose = frame.getViewerPose(space);
       this.update({ cameraFrames: cameraFrameStatus(session, pose?.views) });
       const tracked = !!pose && !pose.emulatedPosition && session.visibilityState === 'visible';
-      this.update({ tracking: !pose ? 'Lost; move slowly to recover' : pose.emulatedPosition ? 'Limited; position is emulated' : session.visibilityState !== 'visible' ? 'Paused; session not visible' : 'Tracking (device UNVERIFIED)' });
+      this.update({ tracking: !pose ? 'Lost; move slowly to recover' : pose.emulatedPosition ? 'Limited; position is emulated' : session.visibilityState !== 'visible' ? 'Paused; session not visible' : 'Tracking' });
       world.marker.visible = tracked && this.placed;
       world.leftBase.visible = tracked && !!this.leftPoint && !this.placed;
       world.reticle.visible = false;

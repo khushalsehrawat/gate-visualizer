@@ -6,6 +6,7 @@ import { OpeningEditor } from './OpeningEditor';
 import { preparePhoto } from './photo';
 import type { OpeningPhoto } from './photo';
 import type { ConfirmedOpening, DetectionResult } from './types';
+import { EntrancePhotoPicker } from '../ui/EntrancePhotoPicker';
 
 interface Props {
   arActive: boolean; locked: boolean;
@@ -63,9 +64,7 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
     <p className="eyebrow">Auto-detect · Review · Confirm</p><h2 id="opening-title">Detect the four opening points</h2>
     <p className="my-3 text-sm">Usable immersive XR camera pixels are UNVERIFIED on your device. This feature analyzes a separate photo before AR. No simultaneous camera stream is opened. Geometric proposals can identify windows or clutter; they are not gate recognition.</p>
     {arActive && <p className="text-sm font-semibold">Exit AR before taking or editing an opening photo. Existing world tracking is unchanged.</p>}
-    <label className="my-4 block text-sm font-semibold">Take/select an entrance photo before AR
-      <input className="mt-2 block w-full" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" disabled={disabled || processing} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void upload(file); event.currentTarget.value = ''; }} />
-    </label>
+    <EntrancePhotoPicker galleryLabel="Take/select an entrance photo before AR" disabled={disabled || processing} onChoose={(file) => { void upload(file); }} />
     <p className="text-xs">Photograph the full inner opening nearly head-on in good light. Choose JPG/PNG/WebP up to 20 MB. Processing stays local, resized to at most 960 px; no model or photo is uploaded.</p>
     {processing && <div className="my-3"><p role="status">Loading/processing with OpenCV.js in a worker. First use loads the local WASM runtime…</p><button className="action mt-2" onClick={cancel}>Cancel detection</button></div>}
     {error && <p role="alert" className="my-3 text-sm text-red-800">{error}</p>}

@@ -11,6 +11,7 @@ import { imageRaster, rasterBlob, renderPhoto } from './browser';
 import { defaultPhotoSettings } from './model';
 import type { PhotoSettings, SavedProject } from './model';
 import { saveProject } from '../storage/projects';
+import { EntrancePhotoPicker } from '../ui/EntrancePhotoPicker';
 
 interface Props { enabled: boolean; restored: SavedProject | null }
 export default function PhotoPage({ enabled, restored }: Props) {
@@ -108,10 +109,10 @@ export default function PhotoPage({ enabled, restored }: Props) {
   }
   function adjust(next: PhotoSettings) { setSettings(next); setError(''); setNotice(''); }
   return <div className="photo-page">
-    <div className="page-intro"><p className="eyebrow">A new perspective, from any device</p><h1>Photo Preview</h1><p>Bring a photograph of your entrance. Position a gate, refine its fit, and export the actual finished image.</p></div>
+    <div className="page-intro"><p className="eyebrow">A new perspective, from any device</p><h1>Photo Preview</h1><p>Use an image of any entrance: your house, an architectural reference, or a photograph of a printed or displayed picture. Add your gate, mark its four opening corners, and export the finished image. This mode does not require AR surface scanning.</p></div>
     <div className="photo-layout">
       <div className="photo-stage">
-        {!photo ? <div className="photo-empty"><span className="large-number">01</span><h2>Begin with your entrance.</h2><p>A clear, nearly frontal photo works best. Your images stay in this browser.</p><label className="primary-button">Choose or take a photo<input className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" capture="environment" disabled={loading} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void choosePhoto(file); event.currentTarget.value = ''; }} /></label></div> : <>
+        {!photo ? <div className="photo-empty"><span className="large-number">01</span><h2>Begin with any entrance image.</h2><p>A clear, nearly frontal photo works best. Your images stay in this browser.</p><EntrancePhotoPicker galleryLabel="Entrance photograph" disabled={loading || detecting} onChoose={(file) => { void choosePhoto(file); }} /></div> : <>
           <div className="stage-toolbar"><span>{before ? 'Before · original photo' : ready ? 'After · composited photo' : 'Position your opening'}</span><div className="button-row"><button className="text-link" disabled={points.length !== 4} onClick={() => setShowGuides(!showGuides)}>{showGuides ? 'Hide guides' : 'Edit corners'}</button><button className="text-link" disabled={!canExport} onClick={() => setBefore(!before)}>{before ? 'Show after' : 'Show before'}</button></div></div>
           <OpeningEditor photo={photo} points={points} onChange={(next) => { setPoints(next); setError(''); setNotice('Manual correction. No automatic confidence is assigned.'); }} disabled={loading || detecting} hideGuides={!showGuides} {...(!before && ready && composite ? { displayUrl: composite.url } : {})} />
           {renderKey && !ready && !error && <p role="status" className="muted mt-3">Rendering perspective preview…</p>}
@@ -124,7 +125,7 @@ export default function PhotoPage({ enabled, restored }: Props) {
       </div>
       <aside className="photo-settings" aria-label="Photo preview controls">
         <p className="eyebrow">Make it yours</p><h2>The details matter.</h2>
-        <label className="field-label">Entrance photograph<input type="file" accept="image/png,image/jpeg,image/webp" capture="environment" disabled={loading || detecting} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void choosePhoto(file); event.currentTarget.value = ''; }} /></label>
+        {photo && <EntrancePhotoPicker galleryLabel="Entrance photograph" disabled={loading || detecting} onChoose={(file) => { void choosePhoto(file); }} />}
         <div className="button-row"><button className="secondary-button" disabled={!photo || detecting} onClick={() => { void detect(); }}>Suggest opening</button><button className="text-link" disabled={!photo || detecting} onClick={() => { setPoints([]); setShowGuides(true); setNotice('Tap top-left, top-right, bottom-right, then bottom-left.'); }}>Mark manually</button></div>
         <label className="field-label">Gate design<select value={gateCatalogue.some((asset) => asset.src === gate?.asset.src) ? gate?.asset.src : ''} disabled={gateLoading} onChange={(event) => { const asset = gateCatalogue.find((item) => item.src === event.currentTarget.value); if (asset) void load(undefined, asset); }}><option value="">Your uploaded gate</option>{gateCatalogue.map((asset) => <option key={asset.id} value={asset.src}>{asset.name}</option>)}</select></label>
         <label className="field-label">Or upload your gate<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void load(file); event.currentTarget.value = ''; }} /></label>

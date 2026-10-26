@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { GateProvider, useGateLibrary } from '../gates/GateProvider';
 import { checking, detectBrowserCapability } from '../capabilities/detect';
 import { Catalogue } from './Catalogue';
@@ -10,10 +10,13 @@ import LivePreview from '../LivePreview';
 import PhotoPage from '../photo/PhotoPage';
 import type { SavedProject } from '../photo/model';
 import { getProject } from '../storage/projects';
-const links = [['home', 'Home'], ['live', 'Live Preview'], ['catalogue', 'Gate Catalogue'], ['upload', 'Upload Your Gate'], ['photo', 'Photo Preview'], ['saved', 'Saved Previews'], ['help', 'Compatibility & Help']] as const;
+const LivePicture = lazy(() => import('../picture/LivePicture'));
+import { PreviewModeButtons } from '../ui/PreviewModeButtons';
+const links = [['home', 'Home'], ['live', 'Live Preview'], ['picture', 'Live Picture'], ['catalogue', 'Gate Catalogue'], ['upload', 'Upload Your Gate'], ['photo', 'Photo Preview'], ['saved', 'Saved Previews'], ['help', 'Compatibility & Help']] as const;
 function currentPage() { return window.location.hash.replace(/^#\/?/, '') || 'home'; }
 function Website() {
   const [page, setPage] = useState(currentPage), [menu, setMenu] = useState(false), [activeAR, setActiveAR] = useState(false);
+  const [activePicture, setActivePicture] = useState(false);
   const [capability, setCapability] = useState(checking), [restored, setRestored] = useState<SavedProject | null>(null);
   const library = useGateLibrary();
   useEffect(() => { const change = () => { if (activeAR && currentPage() !== 'live') { window.location.hash = '/live'; return; } setPage(currentPage()); setMenu(false); }; window.addEventListener('hashchange', change); return () => window.removeEventListener('hashchange', change); }, [activeAR]);
@@ -31,10 +34,12 @@ function Website() {
     setRestored(project); window.location.hash = '/photo';
   }
   return <div className="site-shell"><a href="#main-content" className="skip-link" onClick={(event) => { event.preventDefault(); document.getElementById('main-content')?.focus(); }}>Skip to content</a><header className="site-header"><a className="wordmark" href="#/home" aria-label="GateVisualizer home"><span className="brand-symbol" aria-hidden="true"><i /><i /><i /></span>GateVisualizer<span className="brand-period">.</span></a><button className="menu-toggle" aria-expanded={menu} aria-controls="site-navigation" onClick={() => setMenu(!menu)}>{menu ? 'Close menu' : 'Menu'}</button><nav id="site-navigation" className={menu ? 'site-nav is-open' : 'site-nav'} aria-label="Main navigation">{links.filter(([key]) => key !== 'home').map(([key, label]) => <a key={key} className={(capability.status === 'supported' ? key === 'live' : key === 'photo') ? 'nav-live' : ''} href={`#/${key}`} aria-current={page === key ? 'page' : undefined} aria-disabled={activeAR && key !== 'live'} onClick={(event) => { if (activeAR && key !== 'live') event.preventDefault(); }}>{label}</a>)}</nav></header>
-    {activeAR && <p className="active-session-note">Live Preview is active. Exit AR before switching workspaces.</p>}
-    <main id="main-content" className="site-main" tabIndex={-1}>
+    {!activeAR && !activePicture && <PreviewModeButtons page={page} arActive={activeAR} />}
+    {activeAR && <p className="active-session-note">Live Camera AR is active. Exit AR before switching camera modes.</p>}
+    <main id="main-content" className={`site-main ${activeAR || activePicture ? 'camera-main' : ''}`} tabIndex={-1}>
       {page === 'home' && <Home supported={capability.status === 'supported'} checking={capability.status === 'checking'} />}
       {page === 'live' && <LivePreview onActiveChange={setActiveAR} />}
+      {page === 'picture' && <Suspense fallback={<p role="status">Opening picture camera tools…</p>}><LivePicture onActiveChange={setActivePicture} /></Suspense>}
       {page === 'catalogue' && <Catalogue />}{page === 'upload' && <UploadGate />}
       <section hidden={page !== 'photo'} aria-label="Photo Preview workspace"><PhotoPage enabled={page === 'photo'} restored={restored} /></section>
       {page === 'saved' && <SavedPreviews onOpen={reopen} />}{page === 'help' && <Help capability={capability} />}

@@ -36,6 +36,47 @@
   .live-workspace .xr-controls[data-xr-active='true'] { background:transparent; border:0; border-radius:0; }
   .photo-page .action { background:var(--ink); border-radius:2px; font-size:12px; }
   .photo-page .corner-handle { background:#292d2be8; }
+  .picture-camera { position:relative; width:100%; max-width:850px; margin:20px 0; background:#151916; }
+  .picture-camera video { display:block; width:100%; height:auto; }
+  .region-fit-preview .picture-camera img { display:block; width:100%; height:auto; }
+  .picture-camera canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .picture-review { max-width:850px; margin:25px 0; }
+  .picture-review .opening-editor { margin:20px 0; }
+  .picture-page .field-label { max-width:850px; }
+  .preview-mode-picker { display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:1440px; margin:auto; padding:20px clamp(20px,5vw,90px); }
+  .preview-mode-button { display:flex; flex-direction:column; justify-content:center; gap:8px; min-height:100px; padding:20px 24px; background:#fffdf9; color:var(--ink); border:1px solid var(--line); text-decoration:none; }
+  .preview-mode-button strong { font-size:17px; font-weight:600; }
+  .preview-mode-button span { font-size:12px; line-height:1.5; }
+  .preview-mode-button[aria-current='page'] { background:var(--ink); color:white; border-color:var(--ink); }
+  .preview-mode-button:hover { border-color:var(--accent); }
+  .preview-mode-button:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+  .preview-mode-button[aria-disabled='true'] { opacity:.5; cursor:not-allowed; }
+  .picture-start-controls { margin:20px 0; }
+  .home-simple { max-width:720px; padding:35px 0; }
+  .home-simple h1 { font-size:clamp(2rem,6vw,3rem); margin-bottom:20px; }
+  .home-simple > p { font-size:14px; color:var(--muted); }
+  .simple-intro { padding:28px 0 22px; }
+  .simple-intro h1 { font-size:clamp(2rem,6vw,3rem); margin-bottom:14px; }
+  .simple-options { margin:16px 0; border-top:1px solid var(--line); padding-top:6px; }
+  .simple-options > summary { min-height:44px; display:list-item; padding:12px 0; font-size:13px; cursor:pointer; }
+  .simple-camera-actions { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+  .preview-mode-picker.is-compact { grid-template-columns:1fr 1fr; gap:8px; padding-top:12px; padding-bottom:12px; }
+  .preview-mode-picker.is-compact .preview-mode-button { min-height:64px; padding:12px; }
+  .preview-mode-picker.is-compact .preview-mode-button strong { font-size:14px; }
+  .preview-mode-picker.is-compact .preview-mode-button span { display:none; }
+  .xr-controls:has(.xr-control-card[hidden]) { border:0; padding:0; margin:0; }
+  .camera-main { padding:12px; }
+  .site-shell:has(.camera-main) > .site-header,.site-shell:has(.camera-main) > .site-footer,.site-shell:has(.camera-main) > .active-session-note { display:none; }
+  .picture-page.camera-is-open .picture-start-controls { margin:0 0 12px; }
+  .picture-page.camera-is-open .picture-camera { margin:0; }
+  .live-workspace .live-gate-setup { grid-template-columns:1fr; gap:10px; padding:22px; margin-bottom:16px; }
+  .live-workspace .live-gate-setup h2 { font-size:25px; }
+  .site-header { position:relative; padding-top:16px; padding-bottom:16px; }
+  .site-header .menu-toggle { display:block; }
+  .site-header .site-nav { display:none; }
+  .site-header .site-nav.is-open { display:flex; position:absolute; top:100%; left:0; right:0; z-index:20; background:var(--ivory); border-bottom:1px solid var(--line); padding:20px 24px; flex-direction:column; align-items:stretch; font-size:13px; }
+  [hidden] { display:none !important; }
+  @media(max-width:680px) { .preview-mode-picker { grid-template-columns:1fr; gap:10px; padding:16px 20px; }.preview-mode-button { min-height:84px; padding:16px 20px; } }
   .live-gate-setup { display:grid; grid-template-columns:1fr 1fr; gap:40px; border:1px solid var(--line); padding:30px; margin-bottom:25px; background:#fffdf9; }
   .live-gate-setup h2 { font-size:30px; margin-bottom:15px; }.live-gate-setup p { font-size:13px; color:var(--muted); }
   .live-upload-controls .field-label:first-child { margin-top:0; }
