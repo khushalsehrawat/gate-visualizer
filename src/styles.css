@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@layer base {
+  body { margin: 0; min-width: 320px; background: #f4f6f7; color: #172c36; font-family: system-ui, sans-serif; }
+  h2 { font-size: 1.15rem; font-weight: 650; }
+  dt { color: #526574; margin-bottom: .3rem; }
+  dd { font-weight: 600; overflow-wrap: anywhere; }
+  button:focus-visible { outline: 3px solid #0d9488; outline-offset: 4px; }
+}
+@layer components {
+  .panel { border: 1px solid #dce3e7; border-radius: 1rem; background: white; }
+  .eyebrow { margin-bottom: .5rem; font-size: .7rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #51716f; }
+  .tag { border: 1px solid #ccdcd9; border-radius: 999px; padding: .35rem .7rem; font-size: .7rem; font-weight: 600; color: #345a55; }
+  .checkerboard { background-color: #fafafa; background-image: conic-gradient(#e5e9eb 25%, transparent 0 50%, #e5e9eb 0 75%, transparent 0); background-size: 24px 24px; }
+  .action { min-height: 44px; border-radius: .75rem; background: #0f766e; color: white; padding: .75rem 1rem; font-weight: 600; }
+  .action:disabled { background: #cbd5e1; color: #475569; cursor: not-allowed; }
+  .xr-canvas-host { position: fixed; width: 1px; height: 1px; overflow: hidden; pointer-events: none; }
+  .xr-controls[data-xr-active="true"] { background: transparent; border: 0; border-radius: 0; margin: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); pointer-events: none; }
+  .xr-controls[data-xr-active="true"] > * { background: rgb(244 246 247 / 94%); color: #172c36; padding: 6px 10px; margin: 0; }
+  .xr-controls[data-xr-active="true"] .xr-control-card { max-height: calc(48svh - max(12px, env(safe-area-inset-bottom))); overflow-y: auto; overscroll-behavior: contain; pointer-events: auto; border-radius: 12px; }
+  .xr-controls[data-xr-active="true"] dl { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; font-size: 11px; }
+  .xr-controls[data-xr-active="true"] button, .xr-controls[data-xr-active="true"] input, .xr-controls[data-xr-active="true"] select, .xr-controls[data-xr-active="true"] details { pointer-events: auto; }
+  .xr-controls[data-xr-active="true"] .calibration-body, .xr-controls[data-xr-active="true"] .session-diagnostics[open] { max-height: 30svh; overflow-y: auto; overscroll-behavior: contain; }
+  .xr-controls[data-xr-active="true"] h2, .xr-controls[data-xr-active="true"] .xr-control-card > p:last-child { display: none; }
+  .xr-controls[data-xr-active="true"] .action { font-size: 12px; padding: 8px 10px; }
+  .opening-editor { position: relative; width: 100%; overflow: hidden; background: #172c36; }
+  .corner-handle { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); border: 2px solid white; border-radius: 50%; background: #0f766edd; color: white; font-size: 11px; font-weight: 700; touch-action: none; }
+  .opening-magnifier { position: relative; width: 140px; height: 140px; flex-shrink: 0; border: 2px solid #0f766e; background-repeat: no-repeat; background-color: #cbd5e1; }
+  .opening-magnifier::before, .opening-magnifier::after { content: ''; position: absolute; background: #ff5000; }
+  .opening-magnifier::before { width: 1px; height: 100%; left: 50%; }
+  .opening-magnifier::after { height: 1px; width: 100%; top: 50%; }
+}

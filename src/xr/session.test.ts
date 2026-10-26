@@ -1,0 +1,413 @@
+import { Matrix4, Mesh } from 'three';
+import type { Group, Scene } from 'three';
+import { describe, expect, it, vi } from 'vitest';
+import { initialXRStatus, sessionError, XRSessionController } from './session';
+import type { XRStatus } from './session';
+import type { XRRenderer } from './rendering';
+import { defaultCalibration } from '../geometry/calibration';
+import type { GateImage } from '../gates/loadImage';
+import { defaultPresentation } from '../gates/presentation';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker' }: { hitTest?: boolean; floor?: boolean; overlay?: boolean; mode?: 'gate' | 'marker' } = {}) {
+  const space = new EventTarget() as XRReferenceSpace;
+  const viewer = new EventTarget() as XRReferenceSpace;
+  const source = { cancel: vi.fn() };
+  const session = Object.assign(new EventTarget(), {
+    visibilityState: 'visible', enabledFeatures: [],
+    domOverlayState: overlay ? { type: 'screen' } : undefined,
+    requestReferenceSpace: vi.fn(async (type: string) => {
+      if (type === 'local-floor' && !floor) throw new DOMException('no floor', 'NotSupportedError');
+      return type === 'viewer' ? viewer : space;
+    }),
+    requestHitTestSource: vi.fn(async () => {
+      if (!hitTest) throw new DOMException('no hit test', 'NotSupportedError');
+      return source;
+    }),
+    end: vi.fn(async () => { session.dispatchEvent(new Event('end')); }),
+  });
+  const requestSession = vi.fn().mockResolvedValue(session);
+  let loop: ((time: number, frame?: XRFrame) => void) | null = null;
+  const renderer = {
+    domElement: document.createElement('canvas'),
+    xr: { enabled: false, setReferenceSpaceType: vi.fn(), setReferenceSpace: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
+    setAnimationLoop: vi.fn((callback) => { loop = callback; }), render: vi.fn(),
+    dispose: vi.fn(), forceContextLoss: vi.fn(), setSize: vi.fn(), setPixelRatio: vi.fn(), setClearColor: vi.fn(),
+  };
+  const host = document.createElement('div');
+  const overlayRoot = document.createElement('section');
+  const statuses: XRStatus[] = [];
+  const rendererFactory = vi.fn(() => renderer as unknown as XRRenderer);
+  const controller = new XRSessionController({ xr: { requestSession }, host, overlay: overlayRoot, onStatus: (status) => statuses.push(status), rendererFactory, mode });
+  function frame({ time = 0, x = 0, hitX = 2, hitY = 0, tilt = false, hit = hitTest, tracking = true, emulated = false, anchorPose = true, createAnchor, frameAnchor }: { time?: number; x?: number; hitX?: number; hitY?: number; tilt?: boolean; hit?: boolean; tracking?: boolean; emulated?: boolean; anchorPose?: boolean; createAnchor?: () => Promise<XRAnchor>; frameAnchor?: (pose: XRRigidTransform, space: XRSpace) => Promise<XRAnchor> } = {}) {
+    const hitMatrix = new Matrix4().makeTranslation(hitX, hitY, -2);
+    if (tilt) hitMatrix.multiply(new Matrix4().makeRotationX(-Math.PI / 2));
+    const hitPose = { transform: { matrix: new Float32Array(hitMatrix.elements) } };
+    const result = { getPose: vi.fn(() => hitPose), ...(createAnchor ? { createAnchor: vi.fn(createAnchor) } : {}) };
+    const xrFrame = {
+      session,
+      getViewerPose: vi.fn(() => tracking ? { emulatedPosition: emulated, transform: { matrix: new Float32Array(new Matrix4().makeTranslation(x, 1.6, 0).elements) } } : null),
+      getHitTestResults: vi.fn(() => hit ? [result] : []),
+      getPose: vi.fn(() => anchorPose ? hitPose : null),
+      ...(frameAnchor ? { createAnchor: frameAnchor } : {}),
+    } as unknown as XRFrame;
+    loop?.(time, xrFrame);
+    return xrFrame;
+  }
+  function marker(): Group { return (renderer.render.mock.lastCall?.[0] as Scene).children[0] as Group; }
+  return { controller, session, space, source, requestSession, renderer, rendererFactory, host, overlayRoot, frame, marker, statuses, status: () => statuses.at(-1) ?? initialXRStatus };
+}
+
+describe('real XR session controller (mocked platform)', () => {
+  it('requests immersive AR immediately and only once, with optional enhancements', async () => {
+    const h = harness();
+    const start = h.controller.start();
+    expect(h.requestSession).toHaveBeenCalledExactlyOnceWith('immersive-ar', {
+      requiredFeatures: ['local'], optionalFeatures: ['local-floor', 'hit-test', 'anchors', 'dom-overlay'], domOverlay: { root: h.overlayRoot },
+    });
+    await h.controller.start(); await start;
+    expect(h.requestSession).toHaveBeenCalledTimes(1);
+    expect(h.renderer.xr.enabled).toBe(true);
+    expect(h.renderer.xr.setReferenceSpace).toHaveBeenCalledWith(h.space);
+    expect(h.status().session).toBe('running');
+    await h.controller.exit();
+  });
+
+  it('handles denied session permission without allocating a renderer', async () => {
+    const h = harness();
+    h.requestSession.mockRejectedValue(new DOMException('no', 'NotAllowedError'));
+    await h.controller.start();
+    expect(h.status().session).toBe('error');
+    expect(h.status().message).toMatch(/permission was denied/);
+    expect(h.rendererFactory).not.toHaveBeenCalled();
+  });
+
+  it('falls back to local space and fixed-distance placement without following the viewer', async () => {
+    const h = harness({ floor: false, hitTest: false, overlay: false });
+    await h.controller.start();
+    expect(h.status().referenceSpace).toBe('local');
+    expect(h.status().overlay).toMatch(/Unavailable/);
+    h.session.dispatchEvent(new Event('select'));
+    h.frame({ x: 1 });
+    const matrix = h.marker().matrix.clone();
+    expect(matrix.elements[12]).toBe(1);
+    expect(matrix.elements[14]).toBe(-1.5);
+    h.frame({ x: 5 });
+    expect(h.marker().matrix.equals(matrix)).toBe(true);
+    expect(h.marker().parent?.type).toBe('Scene');
+    expect(h.status().anchors).toMatch(/session-scoped/);
+    h.session.dispatchEvent(new Event('select'));
+    expect(h.marker().visible).toBe(false);
+    await h.controller.exit();
+  });
+
+  it('requires a current surface hit, then fixes the marker in reference space', async () => {
+    const h = harness(); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hit: false });
+    expect(h.status().placement).toBe('Not placed');
+    h.controller.queuePlacement(); h.frame({ hitX: 3 });
+    expect(h.marker().matrix.elements[12]).toBe(3);
+    h.frame({ x: 7, hitX: 9 });
+    expect(h.marker().matrix.elements[12]).toBe(3);
+    await h.controller.exit();
+  });
+
+  it('hides content on tracking loss, refuses emulated poses and restores the same placement', async () => {
+    const h = harness(); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ emulated: true });
+    expect(h.status().placement).toBe('Not placed');
+    h.controller.queuePlacement(); h.frame();
+    const matrix = h.marker().matrix.clone();
+    h.frame({ tracking: false }); expect(h.marker().visible).toBe(false);
+    expect(h.status().tracking).toMatch(/Lost/);
+    h.frame({ x: 5 }); expect(h.marker().visible).toBe(true);
+    expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.space.dispatchEvent(new Event('reset'));
+    expect(h.status().placement).toBe('Not placed');
+    await h.controller.exit();
+  });
+
+  it('uses an anchor pose and hides an unlocatable anchor; deletes anchors on reset', async () => {
+    const h = harness(); await h.controller.start();
+    const anchor = { anchorSpace: {}, delete: vi.fn() } as unknown as XRAnchor;
+    h.controller.queuePlacement(); h.frame({ createAnchor: async () => anchor });
+    await Promise.resolve();
+    h.frame({ hitX: 4 }); expect(h.marker().matrix.elements[12]).toBe(4);
+    expect(h.status().anchors).toBe('Tracking anchor');
+    h.frame({ anchorPose: false }); expect(h.marker().visible).toBe(false);
+    h.controller.reset(); expect(anchor.delete).toHaveBeenCalledTimes(1);
+    await h.controller.exit();
+  });
+
+  it('falls back when anchor creation rejects', async () => {
+    const h = harness(); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ createAnchor: async () => { throw new Error('unsupported'); } });
+    await vi.waitFor(() => expect(h.status().anchors).toMatch(/Creation failed/));
+    expect(h.marker().visible).toBe(true);
+    await h.controller.exit();
+  });
+
+  it('uses frame.createAnchor in the chosen reference space if hit-result anchors are absent', async () => {
+    const h = harness(); await h.controller.start();
+    const anchor = { anchorSpace: {}, delete: vi.fn() } as unknown as XRAnchor;
+    const frameAnchor = vi.fn().mockResolvedValue(anchor);
+    h.controller.queuePlacement(); h.frame({ frameAnchor });
+    expect(frameAnchor).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ matrix: expect.any(Float32Array) }), h.space);
+    await Promise.resolve(); await h.controller.exit();
+    expect(anchor.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('deletes late anchors after reset or exit instead of attaching stale placement', async () => {
+    const h = harness(); await h.controller.start();
+    const pending = deferred<XRAnchor>();
+    const anchor = { delete: vi.fn() } as unknown as XRAnchor;
+    h.controller.queuePlacement(); h.frame({ createAnchor: () => pending.promise });
+    h.controller.reset(); await h.controller.exit();
+    pending.resolve(anchor); await Promise.resolve();
+    expect(anchor.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a late hit-test source if the session ends during setup', async () => {
+    const h = harness();
+    const pending = deferred<typeof h.source>();
+    h.session.requestHitTestSource.mockReturnValue(pending.promise);
+    const start = h.controller.start();
+    await vi.waitFor(() => expect(h.session.requestHitTestSource).toHaveBeenCalled());
+    await h.controller.exit();
+    pending.resolve(h.source); await start;
+    expect(h.source.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends a session that resolves after disposal and does not allocate a renderer', async () => {
+    const h = harness(); const pending = deferred<XRSession>();
+    h.requestSession.mockReturnValue(pending.promise);
+    const start = h.controller.start(); h.controller.dispose();
+    pending.resolve(h.session as unknown as XRSession); await start;
+    expect(h.session.end).toHaveBeenCalledTimes(1);
+    expect(h.rendererFactory).not.toHaveBeenCalled();
+  });
+
+  it('defers rendering disposal until an in-flight renderer attachment settles', async () => {
+    const h = harness(); const attaching = deferred<void>();
+    h.renderer.xr.setSession.mockReturnValue(attaching.promise);
+    const start = h.controller.start();
+    await vi.waitFor(() => expect(h.renderer.xr.setSession).toHaveBeenCalled());
+    await h.controller.exit();
+    expect(h.renderer.dispose).not.toHaveBeenCalled();
+    attaching.resolve(); await start;
+    expect(h.renderer.dispose).toHaveBeenCalledTimes(1);
+    expect(h.host.children).toHaveLength(0);
+    expect(h.status().session).toBe('ended');
+    expect(h.overlayRoot.dataset.xrActive).toBeUndefined();
+  });
+
+  it('ends and cleans resources when renderer attachment fails', async () => {
+    const h = harness();
+    h.renderer.xr.setSession.mockRejectedValue(new Error('WebGL setup failed'));
+    await h.controller.start();
+    expect(h.session.end).toHaveBeenCalledTimes(1);
+    expect(h.status().session).toBe('error');
+    expect(h.renderer.dispose).toHaveBeenCalledTimes(1);
+    expect(h.host.children).toHaveLength(0);
+  });
+
+  it('cleans an active session when the page controller is disposed', async () => {
+    const h = harness(); await h.controller.start();
+    h.controller.dispose();
+    await vi.waitFor(() => expect(h.renderer.dispose).toHaveBeenCalledTimes(1));
+    expect(h.session.end).toHaveBeenCalledTimes(1);
+    expect(h.source.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases application resources on disposal even if native end rejects', async () => {
+    const h = harness(); await h.controller.start();
+    h.session.end.mockRejectedValueOnce(new Error('platform end failed'));
+    h.controller.dispose();
+    await vi.waitFor(() => expect(h.renderer.dispose).toHaveBeenCalledTimes(1));
+    expect(h.source.cancel).toHaveBeenCalledTimes(1);
+    expect(h.host.children).toHaveLength(0);
+  });
+
+  it('attempts to end AR on pagehide', async () => {
+    const h = harness(); await h.controller.start();
+    window.dispatchEvent(new Event('pagehide'));
+    await vi.waitFor(() => expect(h.status().session).toBe('ended'));
+    expect(h.session.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('exits with a clear error when WebGL context is lost', async () => {
+    const h = harness(); await h.controller.start();
+    h.renderer.domElement.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    await vi.waitFor(() => expect(h.status().session).toBe('error'));
+    expect(h.status().message).toMatch(/context lost/);
+    expect(h.renderer.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans listeners, sources, anchors, GPU resources and canvas after native end', async () => {
+    const h = harness(); await h.controller.start();
+    const anchor = { anchorSpace: {}, delete: vi.fn() } as unknown as XRAnchor;
+    h.controller.queuePlacement(); h.frame({ createAnchor: async () => anchor }); await Promise.resolve();
+    const mesh = h.marker().children[0] as Mesh;
+    const geometryDispose = vi.spyOn(mesh.geometry, 'dispose');
+    const materialDispose = vi.spyOn(Array.isArray(mesh.material) ? mesh.material[0]! : mesh.material, 'dispose');
+    const removeSession = vi.spyOn(h.session, 'removeEventListener');
+    const removeSpace = vi.spyOn(h.space, 'removeEventListener');
+    h.session.dispatchEvent(new Event('end')); await Promise.resolve();
+    expect(h.status().session).toBe('ended');
+    expect(h.source.cancel).toHaveBeenCalledTimes(1);
+    expect(anchor.delete).toHaveBeenCalledTimes(1);
+    expect(geometryDispose).toHaveBeenCalledTimes(1); expect(materialDispose).toHaveBeenCalledTimes(1);
+    expect(h.renderer.dispose).toHaveBeenCalledTimes(1); expect(h.renderer.forceContextLoss).toHaveBeenCalledTimes(1);
+    expect(h.renderer.setAnimationLoop).toHaveBeenLastCalledWith(null);
+    expect(h.host.children).toHaveLength(0);
+    expect(removeSession).toHaveBeenCalledWith('select', expect.any(Function));
+    expect(removeSession).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    expect(removeSpace).toHaveBeenCalledWith('reset', expect.any(Function));
+    await h.controller.exit(); expect(h.renderer.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an exit handle after end rejects, then successfully retries', async () => {
+    const h = harness(); await h.controller.start();
+    h.session.end.mockRejectedValueOnce(new Error('busy'));
+    await h.controller.exit();
+    expect(h.status().session).toBe('running');
+    expect(h.status().message).toMatch(/Retry Exit/);
+    expect(h.renderer.dispose).not.toHaveBeenCalled();
+    await h.controller.exit(); expect(h.renderer.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('can restart cleanly after exit', async () => {
+    const h = harness(); await h.controller.start(); await h.controller.exit();
+    await h.controller.start();
+    expect(h.requestSession).toHaveBeenCalledTimes(2);
+    expect(h.status().session).toBe('running');
+    await h.controller.exit();
+  });
+
+  it('suppresses XR select for overlay buttons and handles visibility pause', async () => {
+    const h = harness(); await h.controller.start();
+    const button = document.createElement('button'); h.overlayRoot.append(button);
+    const event = new Event('beforexrselect', { bubbles: true, cancelable: true });
+    button.dispatchEvent(event); expect(event.defaultPrevented).toBe(true);
+    h.controller.queuePlacement(); h.frame();
+    h.session.visibilityState = 'hidden'; h.session.dispatchEvent(new Event('visibilitychange'));
+    expect(h.marker().visible).toBe(false);
+    await h.controller.exit();
+  });
+
+  it('maps unsupported and conflicting sessions to clear errors', () => {
+    expect(sessionError(new DOMException('', 'NotSupportedError'))).toMatch(/ARCore-certified/);
+    expect(sessionError(new DOMException('', 'InvalidStateError'))).toMatch(/Another XR session/);
+  });
+});
+
+function gateFixture(width = 640, height = 360): GateImage {
+  return { image: document.createElement('img'), asset: { id: 'gate-test', name: 'Gate test', src: '/gate.png', widthPixels: width, heightPixels: height, placeholder: false } };
+}
+
+describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('requires two distinct real hits and keeps a vertical gate fixed as the viewer moves', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5, tilt: true });
+    expect(h.status().calibration).toBe('Capture right pillar base');
+    expect(h.marker().visible).toBe(false);
+    h.controller.queuePlacement(); h.frame({ hitX: 1.5, tilt: true });
+    expect(h.status().baseline).toBe(3);
+    expect(h.marker().visible).toBe(true);
+    expect(h.marker().matrix.elements[12]).toBeCloseTo(0);
+    expect(h.marker().matrix.elements[5]).toBeCloseTo(1);
+    const placed = h.marker().matrix.clone();
+    h.frame({ x: 5, hitX: 9 });
+    expect(h.marker().matrix.equals(placed)).toBe(true);
+    expect(h.marker().children[0]?.visible).toBe(false);
+    expect(h.marker().children[1]?.visible).toBe(true);
+    await h.controller.exit();
+  });
+  it('rejects duplicate points and inconsistent base heights without claiming calibration', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: 0 });
+    h.controller.queuePlacement(); h.frame({ hitX: 0.01 });
+    expect(h.status().placement).toBe('Not placed');
+    expect(h.status().message).toMatch(/distinct RIGHT/);
+    h.controller.queuePlacement(); h.frame({ hitX: 3, hitY: 0.5 });
+    expect(h.status().placement).toBe('Not placed');
+    expect(h.status().message).toMatch(/25 cm/);
+    h.controller.reset(); expect(h.status().calibration).toBe('Capture left pillar base');
+    await h.controller.exit();
+  });
+  it('preserves calibration, adjustments, anchor and lock across image replacement', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
+    const anchor = { anchorSpace: {}, delete: vi.fn() } as unknown as XRAnchor;
+    h.controller.queuePlacement(); h.frame({ hitX: 1.5, createAnchor: async () => anchor }); await Promise.resolve();
+    expect(h.controller.setCalibration({ ...defaultCalibration, x: 0.2, elevation: 0.1, yaw: 5 })).toBe(true);
+    h.frame({ hitX: 1.5 }); const matrix = h.marker().matrix.clone();
+    h.controller.lockPlacement();
+    expect(h.controller.setCalibration({ ...defaultCalibration, x: 5 })).toBe(false);
+    h.session.dispatchEvent(new Event('select'));
+    h.controller.setGateImage(gateFixture(1000, 1000)); h.frame({ hitX: 1.5, x: 9 });
+    expect(h.marker().matrix.equals(matrix)).toBe(true);
+    expect(h.status().locked).toBe(true);
+    expect(h.status().baseline).toBe(3);
+    expect(anchor.delete).not.toHaveBeenCalled();
+    h.frame({ tracking: false }); expect(h.marker().visible).toBe(false);
+    h.frame({ hitX: 1.5 }); expect(h.marker().visible).toBe(true);
+    h.space.dispatchEvent(new Event('reset'));
+    expect(h.status().placement).toBe('Not placed'); expect(h.status().locked).toBe(false);
+    await h.controller.exit();
+  });
+  it('provides an explicitly approximate manual plane when hit testing is unavailable', async () => {
+    const h = harness({ mode: 'gate', hitTest: false }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    expect(h.status().message).toMatch(/not depth-calibrated/);
+    h.controller.queuePlacement(); h.frame({ x: 1 });
+    expect(h.status().calibration).toMatch(/Manual alignment required/);
+    expect(h.status().baseline).toBeNull();
+    expect(h.marker().matrix.elements[12]).toBe(1);
+    expect(h.marker().matrix.elements[14]).toBe(-1.5);
+    h.controller.setCalibration({ ...defaultCalibration, elevation: -1.6 }); h.frame({ x: 5 });
+    expect(h.marker().matrix.elements[13]).toBeCloseTo(0);
+    expect(h.marker().matrix.elements[12]).toBe(1);
+    await h.controller.exit();
+  });
+  it('does not place an untextured gate before the image is loaded', async () => {
+    const h = harness({ mode: 'gate' }); await h.controller.start();
+    h.controller.queuePlacement(); h.frame();
+    expect(h.status().message).toMatch(/Load a gate image/);
+    expect(h.status().placement).toBe('Not placed');
+    await h.controller.exit();
+  });
+});
+
+describe('Stage 5 live fitting transitions', () => {
+  it('preserves lock/placement across appearance, before/after and catalogue changes; recovery restores the gate', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
+    h.controller.queuePlacement(); h.frame({ hitX: 1.5 });
+    h.controller.setPresentation({ ...defaultPresentation, fitting: 'crop' });
+    h.controller.lockPlacement(); const original = h.marker().matrix.clone();
+    expect(h.controller.setPresentation({ ...defaultPresentation, fitting: 'proportional' })).toBe(false);
+    expect(h.controller.setPresentation({ ...defaultPresentation, fitting: 'crop', opacity: 0.4, before: true })).toBe(true);
+    expect(h.marker().children[1]?.visible).toBe(false);
+    h.controller.setGateImage(gateFixture(480, 360)); h.frame({ x: 5, time: 16 });
+    expect(h.marker().matrix.equals(original)).toBe(true); expect(h.status().locked).toBe(true);
+    h.controller.setPresentation({ ...defaultPresentation, fitting: 'crop', opacity: 0.4, before: false });
+    expect(h.marker().children[1]?.visible).toBe(true);
+    h.frame({ tracking: false, time: 32 }); expect(h.marker().visible).toBe(false);
+    h.frame({ x: 8, time: 48 }); expect(h.marker().visible).toBe(true); expect(h.marker().matrix.equals(original)).toBe(true);
+    h.space.dispatchEvent(new Event('reset')); expect(h.status().locked).toBe(false); expect(h.status().placement).toBe('Not placed');
+    await h.controller.exit();
+  });
+  it('nudges horizontally in the placed plane’s world direction and honors the lock', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 }); h.controller.queuePlacement(); h.frame({ hitX: 1.5 });
+    const next = h.controller.nudgeHorizontal(0.01)!; expect(next.x).toBeCloseTo(0.01); expect(next.z).toBeCloseTo(0);
+    h.frame({ time: 16 }); expect(h.marker().matrix.elements[12]).toBeCloseTo(0.01);
+    h.controller.lockPlacement(); expect(h.controller.nudgeHorizontal(0.01)).toBeNull();
+    await h.controller.exit();
+  });
+});
