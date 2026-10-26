@@ -311,6 +311,45 @@ function gateFixture(width = 640, height = 360): GateImage {
 }
 
 describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('allows explicit manual placement when hit testing exists but finds no surface, without camera following', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hit: false });
+    expect(h.status().placement).toBe('Not placed');
+    h.controller.queuePlacement(true); h.frame({ hit: false, x: 1 });
+    expect(h.status().placement).toBe('Placed 1.5 m ahead (no surface alignment)');
+    expect(h.status().calibration).toMatch(/Manual alignment required/);
+    expect(h.status().baseline).toBeNull();
+    const matrix = h.marker().matrix.clone();
+    h.frame({ x: 6 }); expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.controller.lockPlacement(); h.controller.queuePlacement(true); h.frame({ x: 8 });
+    expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.frame({ tracking: false }); expect(h.marker().visible).toBe(false);
+    h.frame({ x: 9 }); expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.controller.reset();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
+    expect(h.status().calibration).toBe('Capture right pillar base');
+    await h.controller.exit();
+  });
+  it('does not use a surface anchor for an explicitly manual placement even when a hit exists', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
+    const createAnchor = vi.fn();
+    h.controller.queuePlacement(true); h.frame({ x: 2, hitX: 7, createAnchor });
+    expect(createAnchor).not.toHaveBeenCalled();
+    expect(h.status().baseline).toBeNull();
+    expect(h.marker().matrix.elements[12]).toBe(2);
+    expect(h.marker().matrix.elements[14]).toBe(-1.5);
+    await h.controller.exit();
+  });
+  it('refuses manual placement during lost tracking and clears pending manual placement on reset', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(true); h.frame({ tracking: false });
+    expect(h.status().placement).toBe('Not placed');
+    h.frame(); expect(h.status().placement).toBe('Not placed');
+    h.controller.queuePlacement(true); h.controller.reset(); h.frame();
+    expect(h.status().placement).toBe('Not placed');
+    await h.controller.exit();
+  });
   it('requires two distinct real hits and keeps a vertical gate fixed as the viewer moves', async () => {
     const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
     h.controller.queuePlacement(); h.frame({ hitX: -1.5, tilt: true });

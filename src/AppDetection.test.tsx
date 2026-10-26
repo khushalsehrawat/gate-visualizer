@@ -16,7 +16,7 @@ it('transfers only confirmed measurements into calibration and still needs a ges
   Object.defineProperty(navigator, 'xr', { configurable: true, value: { isSessionSupported: vi.fn().mockResolvedValue(true), requestSession } });
   render(<App />);
   await waitFor(() => expect(screen.getByTestId('debug-capability')).toHaveTextContent(/^supported$/));
-  fireEvent.click(screen.getByText('Optional: prepare opening boundaries from a photo'));
+  expect(screen.getByText('Auto-detect opening points & confirm all four').closest('details')).toHaveAttribute('open');
   fireEvent.click(screen.getByRole('button', { name: 'Confirm reviewed test photo' }));
   fireEvent.click(screen.getByText('Gate calibration & image'));
   expect(screen.getByLabelText('Entrance width (m)')).toHaveValue(3.5);

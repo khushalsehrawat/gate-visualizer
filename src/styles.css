@@ -24,6 +24,13 @@
   .xr-controls[data-xr-active="true"] h2, .xr-controls[data-xr-active="true"] .xr-control-card > p:last-child { display: none; }
   .xr-controls[data-xr-active="true"] .action { font-size: 12px; padding: 8px 10px; }
   .opening-editor { position: relative; width: 100%; overflow: hidden; background: #172c36; }
+  .corner-confirmation { border: 1px solid #ccdcd9; padding: 12px; }
+  .corner-confirmation legend { font-weight: 600; font-size: 14px; }
+  .corner-confirmation label { display: flex; align-items: center; gap: 12px; min-height: 48px; font-size: 14px; }
+  .corner-confirmation input { width: 22px; height: 22px; accent-color: #0f766e; }
+  .camera-clarity-help { font-size: 13px; }
+  .camera-clarity-help summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
+  .camera-clarity-help p { margin-bottom: 12px; }
   .corner-handle { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); border: 2px solid white; border-radius: 50%; background: #0f766edd; color: white; font-size: 11px; font-weight: 700; touch-action: none; }
   .opening-magnifier { position: relative; width: 140px; height: 140px; flex-shrink: 0; border: 2px solid #0f766e; background-repeat: no-repeat; background-color: #cbd5e1; }
   .opening-magnifier::before, .opening-magnifier::after { content: ''; position: absolute; background: #ff5000; }

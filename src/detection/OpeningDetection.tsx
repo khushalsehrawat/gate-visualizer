@@ -20,6 +20,7 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [reviewed, setReviewed] = useState<boolean[]>([false, false, false, false]);
   const [measuredWidth, setMeasuredWidth] = useState('');
   const [measuredHeight, setMeasuredHeight] = useState('');
   const generation = useRef(0);
@@ -27,7 +28,7 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
   const task = useRef<ReturnType<typeof runDetection> | null>(null);
   useEffect(() => () => { generation.current += 1; task.current?.cancel(); if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current); }, []);
   const disabled = arActive || locked;
-  function clearConfirmation() { setConfirmed(false); onConfirm(null); }
+  function clearConfirmation() { setConfirmed(false); setReviewed([false, false, false, false]); onConfirm(null); }
   function updatePoints(next: Point[]) { setPoints(next); setSource('manual'); clearConfirmation(); }
   function cancel() { generation.current += 1; task.current?.cancel(); task.current = null; setProcessing(false); onBusy(false); setError('Processing cancelled. You can mark the actual boundaries manually.'); }
   async function analyze(next: OpeningPhoto, version: number) {
@@ -59,7 +60,7 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
   const width = Number(measuredWidth), height = Number(measuredHeight);
   const metricValid = measuredWidth !== '' && measuredHeight !== '' && width >= 0.2 && width <= 20 && height >= 0.2 && height <= 10;
   return <section className="panel my-5 p-5" aria-labelledby="opening-title">
-    <p className="eyebrow">Stage 4 · Separate photo workflow</p><h2 id="opening-title">Propose opening boundaries</h2>
+    <p className="eyebrow">Auto-detect · Review · Confirm</p><h2 id="opening-title">Detect the four opening points</h2>
     <p className="my-3 text-sm">Usable immersive XR camera pixels are UNVERIFIED on your device. This feature analyzes a separate photo before AR. No simultaneous camera stream is opened. Geometric proposals can identify windows or clutter; they are not gate recognition.</p>
     {arActive && <p className="text-sm font-semibold">Exit AR before taking or editing an opening photo. Existing world tracking is unchanged.</p>}
     <label className="my-4 block text-sm font-semibold">Take/select an entrance photo before AR
@@ -77,11 +78,20 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
       <OpeningEditor key={photo.url} photo={photo} points={points} onChange={updatePoints} disabled={disabled || processing} />
       <p className="text-sm">{source === 'manual' ? 'Manual selection/correction — no automatic confidence assigned.' : 'Unconfirmed geometric proposal — review every edge.'}</p>
       {validation && <p className="text-sm text-amber-900">{validation}</p>}
+      {points.length === 4 && !validation && <fieldset className="corner-confirmation" disabled={disabled || processing}>
+        <legend>Confirm each point is on the actual inner entrance boundary</legend>
+        {cornerLabels.map((label, index) => <label key={label}><input type="checkbox" checked={reviewed[index]} onChange={(event) => {
+          const checked = event.currentTarget.checked;
+          setReviewed((previous) => previous.map((value, i) => i === index ? checked : value));
+          setConfirmed(false); onConfirm(null);
+        }} />{label} point is correct</label>)}
+        <p className="text-sm">Correct any handles first, then check all four points. Changing points, candidate, photo or measurements requires a fresh confirmation.</p>
+      </fieldset>}
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm">Tape-measured opening width (m)<input className="mt-1 w-full rounded border p-2" type="number" step="0.01" min="0.2" max="20" disabled={disabled} value={measuredWidth} onChange={(event) => { setMeasuredWidth(event.currentTarget.value); clearConfirmation(); }} /></label>
         <label className="text-sm">Tape-measured gate height (m)<input className="mt-1 w-full rounded border p-2" type="number" step="0.01" min="0.2" max="10" disabled={disabled} value={measuredHeight} onChange={(event) => { setMeasuredHeight(event.currentTarget.value); clearConfirmation(); }} /></label>
       </div>
-      <button className="action" disabled={disabled || processing || !!validation || !metricValid} onClick={() => {
+      <button className="action" disabled={disabled || processing || !!validation || !metricValid || !reviewed.every(Boolean)} onClick={() => {
         onConfirm({ corners: points.map((p) => ({ ...p })) as Quad, source, width, height }); setConfirmed(true);
       }}>Confirm boundaries & measured dimensions</button>
       {confirmed && <p role="status" className="text-sm font-semibold">User-confirmed photo geometry and measurements saved for XR guidance. No world placement or anchor has been created.</p>}
