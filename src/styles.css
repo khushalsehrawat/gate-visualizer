@@ -31,6 +31,14 @@
   .camera-clarity-help { font-size: 13px; }
   .camera-clarity-help summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
   .camera-clarity-help p { margin-bottom: 12px; }
+  .placement-guide { padding: 12px; border: 1px solid #789c8d; background: #f0f5ed; }
+  .placement-progress { display: flex; gap: 20px; list-style: none; font-size: 13px; margin-bottom: 8px; }
+  .placement-progress [aria-current="step"] { font-weight: 750; text-decoration: underline; text-underline-offset: 4px; }
+  .placement-guide > p { font-size: 13px; line-height: 1.5; margin: 8px 0; }
+  .placement-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .xr-controls .placement-actions .capture-bottom { min-height: 54px; flex: 1; font-size: 15px; }
+  .capture-readiness { font-weight: 650; }
+  .xr-controls[data-xr-active="true"] .placement-guide { position: sticky; top: 0; z-index: 1; }
   .corner-handle { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); border: 2px solid white; border-radius: 50%; background: #0f766edd; color: white; font-size: 11px; font-weight: 700; touch-action: none; }
   .opening-magnifier { position: relative; width: 140px; height: 140px; flex-shrink: 0; border: 2px solid #0f766e; background-repeat: no-repeat; background-color: #cbd5e1; }
   .opening-magnifier::before, .opening-magnifier::after { content: ''; position: absolute; background: #ff5000; }

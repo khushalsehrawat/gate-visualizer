@@ -1,4 +1,4 @@
-import { BoxGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, PerspectiveCamera, RingGeometry, Scene, SRGBColorSpace, Texture, WebGLRenderer } from 'three';
+import { BoxGeometry, DoubleSide, Group, LinearFilter, Mesh, MeshBasicMaterial, PerspectiveCamera, RingGeometry, Scene, SRGBColorSpace, Texture, WebGLRenderer } from 'three';
 import { createGatePlane } from '../geometry/gatePlane';
 import { gateLayout } from '../geometry/fitting';
 import { defaultPresentation } from '../gates/presentation';
@@ -9,7 +9,7 @@ import type { GateImage } from '../gates/loadImage';
 export type XRRenderer = Pick<WebGLRenderer, 'domElement' | 'xr' | 'setAnimationLoop' | 'render' | 'dispose' | 'forceContextLoss' | 'setSize' | 'setPixelRatio' | 'setClearColor'> & Partial<Pick<WebGLRenderer, 'info'>>;
 
 export function createXRRenderer(): XRRenderer {
-  return new WebGLRenderer({ alpha: true, antialias: true });
+  return new WebGLRenderer({ alpha: true, antialias: false, powerPreference: 'high-performance', stencil: false });
 }
 
 export function createTestScene() {
@@ -61,13 +61,30 @@ export function createTestScene() {
   const reticle = new Mesh(ringGeometry, ringMaterial);
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
+  // A separate world-space reminder of the captured LEFT bottom point.
+  const leftMaterial = new MeshBasicMaterial({ color: 0xffb547, side: DoubleSide });
+  const leftBase = new Mesh(ringGeometry, leftMaterial);
+  leftBase.matrixAutoUpdate = false;
+  leftBase.visible = false;
   // The marker belongs to the world scene, never to the XR camera.
-  scene.add(marker, reticle);
+  scene.add(marker, reticle, leftBase);
   return {
-    scene, camera, marker, reticle,
+    scene, camera, marker, reticle, leftBase,
     setGateImage(next: GateImage) {
       if (image === next) return;
-      const replacement = new Texture(next.image);
+      let source: HTMLImageElement | HTMLCanvasElement = next.image;
+      const longest = Math.max(next.asset.widthPixels, next.asset.heightPixels);
+      if (longest > 2048) {
+        const canvas = document.createElement('canvas');
+        const ratio = 2048 / longest;
+        canvas.width = Math.max(1, Math.round(next.asset.widthPixels * ratio));
+        canvas.height = Math.max(1, Math.round(next.asset.heightPixels * ratio));
+        const context = canvas.getContext('2d');
+        if (context) { context.drawImage(next.image, 0, 0, canvas.width, canvas.height); source = canvas; }
+      }
+      const replacement = new Texture(source);
+      replacement.generateMipmaps = false;
+      replacement.minFilter = LinearFilter;
       replacement.colorSpace = SRGBColorSpace;
       // HTMLImageElement source + standard PlaneGeometry UVs: top stays up.
       replacement.flipY = true;
@@ -84,7 +101,7 @@ export function createTestScene() {
     dispose() {
       scene.clear();
       cubeGeometry.dispose(); cubeMaterial.dispose();
-      ringGeometry.dispose(); ringMaterial.dispose();
+      ringGeometry.dispose(); ringMaterial.dispose(); leftMaterial.dispose();
       gateGeometry.dispose(); gateMaterial.dispose(); texture?.dispose(); texture = null;
     },
   };

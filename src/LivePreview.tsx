@@ -10,6 +10,7 @@ import { OpeningDetection } from './detection/OpeningDetection';
 import type { ConfirmedOpening } from './detection/types';
 import { PresentationControls } from './ui/PresentationControls';
 import { LiveGateSetup } from './ui/LiveGateSetup';
+import { PlacementGuide } from './ui/PlacementGuide';
 
 export default function LivePreview({ onActiveChange }: { onActiveChange?: (active: boolean) => void }) {
   const [result, setResult] = useState<CapabilityResult>(checking);
@@ -17,7 +18,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
   const [opening, setOpening] = useState<ConfirmedOpening | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const { gate, loading, error, load } = useGateLibrary();
-  const { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place, placeManual, reset, reposition, lock, exit } = useXRSession(gate);
+  const { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place, undoLeft, placeManual, reset, reposition, lock, exit } = useXRSession(gate);
   const [manualReview, setManualReview] = useState(false);
   const busy = ['requesting', 'starting', 'running', 'ending'].includes(status.session);
   useEffect(() => { onActiveChange?.(busy); return () => { onActiveChange?.(false); }; }, [busy, onActiveChange]);
@@ -45,10 +46,10 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
     <section ref={overlayRef} className="xr-controls panel mt-5 p-5" aria-labelledby="debug-title">
       <div className="xr-control-card">
       <p className="eyebrow">Your live preview</p><h2 id="debug-title">Calibration & session</h2>
+      {mode === 'gate' && <PlacementGuide status={status} hasGate={!!gate} onCapture={place} onUndo={undoLeft} />}
       <p className="my-3 text-sm" role="status">{status.message}</p>
       <p className="text-sm font-semibold">Tracking: {status.tracking}</p>
       <details className="camera-clarity-help"><summary>Camera blurry or scanning slowly?</summary><p>Chrome/ARCore controls immersive camera focus and resolution; this page cannot force autofocus or sharpen the passthrough image. Point at a well-lit textured surface 1–2 m away and pause movement. If it stays blurry, Exit AR, close other camera apps and retry Start AR. Placement must be recaptured after restarting.</p><p>For four-point detection, exit AR and take a sharp entrance photo using the photo tool above. Never confirm points you cannot see clearly.</p><button className="action" disabled={status.session !== 'running'} onClick={exit}>Exit AR to retry camera</button></details>
-      {mode === 'gate' && status.session === 'running' && status.placement === 'Not placed' && <p className="live-placement-prompt">{status.hitTest.startsWith('Unavailable') ? 'Surface scanning is unavailable. Tap Place gate (manual) for approximate placement 1.5 m ahead, then lower and align the gate using the live controls.' : status.calibration === 'Capture right pillar base' ? 'Left base saved. Aim the teal ring at the RIGHT inner pillar base, then tap Capture right base.' : 'Move slowly until the teal ring appears on the entrance ground. Aim at the LEFT inner pillar base and tap Capture left base.'}</p>}
       {mode === 'gate' && status.session === 'running' && status.placement !== 'Not placed' && <p className="live-placement-prompt">Your gate is in the live scene. Move sideways to check alignment, adjust if needed, then Lock Placement.</p>}
       {opening && <p className="text-sm">Photo boundaries user-confirmed ({opening.source}). Measured envelope {opening.width.toFixed(2)} × {opening.height.toFixed(2)} m was applied. Match the photo’s BL and BR to the physical LEFT and RIGHT pillar bases with XR hits. Photo pixels have not supplied a world pose or depth.</p>}
       <label className="block text-sm font-semibold">AR mode <select className="ml-2 rounded-lg border bg-white p-2" value={mode} disabled={busy} onChange={(event) => setMode(event.currentTarget.value as 'gate' | 'marker')}><option value="gate">2D gate calibration</option><option value="marker">Stage 2 diagnostic marker</option></select></label>
@@ -72,7 +73,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
       </dl></details>
       <div className="mt-5 flex flex-wrap gap-3">
         {mode === 'gate' && status.session === 'running' && status.placement === 'Not placed' && <button className="action" disabled={!gate} onClick={() => setManualReview(true)}>No surface? Place manually</button>}
-        <button className="action" disabled={status.session !== 'running' || status.placement !== 'Not placed' || (mode === 'gate' && !gate)} onClick={place}>{mode === 'gate' ? (status.hitTest.startsWith('Unavailable') ? 'Place gate (manual)' : status.calibration === 'Capture right pillar base' ? 'Capture right base' : 'Capture left base') : 'Place marker'}</button>
+        {mode === 'marker' && <button className="action" disabled={status.session !== 'running' || status.placement !== 'Not placed'} onClick={place}>Place marker</button>}
         <button className="action" disabled={status.session !== 'running'} onClick={reset}>Reset</button>
         {mode === 'gate' && <><button className="action" disabled={status.session !== 'running' || status.locked} onClick={reposition}>Reposition</button><button className="action" disabled={status.session !== 'running' || status.placement === 'Not placed'} onClick={lock}>{status.locked ? 'Unlock Placement' : 'Lock Placement'}</button></>}
         <button className="action" disabled={!['starting', 'running'].includes(status.session)} onClick={exit}>Exit AR</button>

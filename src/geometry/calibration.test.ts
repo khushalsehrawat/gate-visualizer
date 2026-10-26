@@ -54,4 +54,12 @@ describe('metric gate geometry and aspect ratio', () => {
     expect(validCalibration({ ...defaultCalibration, width: NaN })).toBe(false);
     expect(validCalibration({ ...defaultCalibration, elevation: 11 })).toBe(false);
   });
+  it('can reuse an output matrix each frame without mutating the world placement inputs', () => {
+    const base = new Matrix4().makeTranslation(1, 2, 3), relative = new Matrix4().makeRotationY(0.3);
+    const originalBase = base.clone(), originalRelative = relative.clone(), output = new Matrix4();
+    const expected = adjustedGateMatrix(base, relative, defaultCalibration);
+    expect(adjustedGateMatrix(base, relative, defaultCalibration, output)).toBe(output);
+    expect(output.equals(expected)).toBe(true);
+    expect(base.equals(originalBase)).toBe(true); expect(relative.equals(originalRelative)).toBe(true);
+  });
 });

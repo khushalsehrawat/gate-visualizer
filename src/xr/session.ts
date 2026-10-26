@@ -74,9 +74,11 @@ export class XRSessionController {
   private leftPoint: Vector3 | null = null;
   private placementBase = new Matrix4();
   private gateBasis = new Matrix4();
+  private gateTarget = new Matrix4();
   private presentation: GatePresentation = { ...defaultPresentation };
   private poseFilter = new WorldPoseFilter();
   private profiler = new FrameProfiler();
+  private lastHitReport = -Infinity;
 
   setPresentation(value: GatePresentation) {
     if (!validPresentation(value) || (this.status.locked && value.fitting !== this.presentation.fitting)) return false;
@@ -130,6 +132,7 @@ export class XRSessionController {
     this.startPending = true;
     this.cancelled = false;
     this.profiler.reset(); this.poseFilter.reset();
+    this.lastHitReport = -Infinity;
     this.update({ ...initialXRStatus, session: 'requesting', message: 'Allow Chrome to start immersive AR.' });
     try {
       const session = await this.options.xr.requestSession('immersive-ar', {
@@ -166,7 +169,9 @@ export class XRSessionController {
       this.renderer = renderer;
       renderer.xr.enabled = true;
       renderer.xr.setReferenceSpaceType(this.referenceType);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(1);
+      // Configure before attachment; XR framebuffer size cannot change mid-session.
+      renderer.xr.setFramebufferScaleFactor?.(0.75);
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setClearColor(0x000000, 0);
       renderer.domElement.setAttribute('aria-hidden', 'true');
@@ -182,6 +187,7 @@ export class XRSessionController {
       if (!this.isCurrent(session)) return;
       // Rendering, hit poses and anchor poses use exactly the same space.
       renderer.xr.setReferenceSpace(this.referenceSpace);
+      renderer.xr.setFoveation?.(1);
       this.update({ session: 'running', tracking: 'Waiting for viewer pose', anchors: session.enabledFeatures?.includes('anchors') ? 'Enabled; waiting for placement' : 'Not confirmed; world-space fallback available', message: this.isGate ? 'Scan the entrance floor. Aim at the LEFT pillar base and capture, then the RIGHT base. These are real XR hits, not image corners.' : 'Move slowly and scan a textured, well-lit surface. Aim the teal ring, then tap to place the orange marker.' });
       renderer.setAnimationLoop(this.onFrame);
       await this.setupHitTest(session);
@@ -223,6 +229,7 @@ export class XRSessionController {
       const tracked = !!pose && !pose.emulatedPosition && session.visibilityState === 'visible';
       this.update({ tracking: !pose ? 'Lost; move slowly to recover' : pose.emulatedPosition ? 'Limited; position is emulated' : session.visibilityState !== 'visible' ? 'Paused; session not visible' : 'Tracking (device UNVERIFIED)' });
       world.marker.visible = tracked && this.placed;
+      world.leftBase.visible = tracked && !!this.leftPoint && !this.placed;
       world.reticle.visible = false;
       if (!tracked && this.hitSource) this.update({ hitTest: 'Paused; waiting for positional tracking' });
       if (tracked && this.anchor) {
@@ -233,15 +240,19 @@ export class XRSessionController {
       }
       let hit: XRHitTestResult | undefined;
       let hitPose: XRPose | null = null;
-      if (tracked && this.hitSource) {
+      if (tracked && this.hitSource && !this.placed) {
         hit = frame.getHitTestResults(this.hitSource)[0];
         hitPose = hit?.getPose(space) ?? null;
-        this.update({ hitTest: hitPose ? 'Surface found' : 'Scanning; no surface yet' });
+        if (time - this.lastHitReport >= 150 || this.placeQueued) {
+          this.lastHitReport = time;
+          this.update({ hitTest: hitPose ? 'Surface found' : 'Scanning; no surface yet' });
+        }
         if (hitPose && !this.placed) {
           world.reticle.matrix.fromArray(hitPose.transform.matrix);
           world.reticle.visible = true;
         }
       }
+      if (tracked && this.hitSource && this.placed) this.update({ hitTest: 'Paused after placement; Reposition to scan again' });
       if (this.placeQueued) {
         this.placeQueued = false;
         const manual = this.manualQueued;
@@ -272,7 +283,7 @@ export class XRSessionController {
       // at the origin, and no camera-follow transform is applied to the marker.
       if (this.isGate && this.placed) {
         if (!world.marker.visible) this.poseFilter.reset();
-        const target = adjustedGateMatrix(this.placementBase, this.gateBasis, this.calibration);
+        const target = adjustedGateMatrix(this.placementBase, this.gateBasis, this.calibration, this.gateTarget);
         world.marker.matrix.copy(this.poseFilter.update(target, time, this.presentation.smoothing));
         if (!world.marker.visible) this.poseFilter.reset();
       }
@@ -289,6 +300,10 @@ export class XRSessionController {
     const point = new Vector3().setFromMatrixPosition(matrix);
     if (!this.leftPoint) {
       this.leftPoint = point;
+      if (this.world) {
+        this.world.leftBase.matrix.makeTranslation(point.x, point.y + 0.005, point.z);
+        this.world.leftBase.visible = true;
+      }
       this.update({ calibration: 'Capture right pillar base', message: 'LEFT base captured. Aim at the RIGHT pillar base at the same ground level and capture. Enter measured dimensions; a floor hit alone cannot determine the entrance plane.' });
       return;
     }
@@ -312,6 +327,7 @@ export class XRSessionController {
     world.marker.matrix.copy(matrix);
     world.marker.visible = true;
     world.reticle.visible = false;
+    world.leftBase.visible = false;
     const version = ++this.placementVersion;
     this.update({ placement: pose ? 'Placed on surface' : 'Placed 1.5 m ahead (no surface alignment)', message: this.isGate ? (pose ? 'Gate positioned. Fine-tune measured dimensions, offsets and yaw from multiple viewpoints, then lock. Physical behavior UNVERIFIED.' : 'Approximate gate placed once 1.5 m ahead at camera height. Lower its base and adjust depth/rotation in Gate calibration & image. Check both pillars from the side, then lock. No surface depth was measured; physical behavior UNVERIFIED.') : 'Walk sideways and closer: the orange marker should stay in the world. Tap again to reset. Physical behavior UNVERIFIED.' });
     try {
@@ -342,6 +358,13 @@ export class XRSessionController {
     }
   }
 
+  undoLeftBase = () => {
+    if (!this.isGate || this.placed || this.status.locked || this.status.session !== 'running') return;
+    this.leftPoint = null; this.placeQueued = false; this.manualQueued = false;
+    if (this.world) this.world.leftBase.visible = false;
+    this.update({ baseline: null, calibration: 'Capture left pillar base', message: 'Left bottom point cleared. Aim at the LEFT inner pillar bottom and capture again.' });
+  };
+
   reset = () => {
     ++this.placementVersion;
     this.anchor?.delete(); this.anchor = null;
@@ -349,7 +372,8 @@ export class XRSessionController {
     this.leftPoint = null;
     this.gateBasis.identity();
     this.poseFilter.reset();
-    if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; }
+    this.lastHitReport = -Infinity;
+    if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
     this.update({ placement: 'Not placed', locked: false, baseline: null, calibration: 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
   };
 
@@ -359,7 +383,7 @@ export class XRSessionController {
     this.placeQueued = false; this.manualQueued = false;
     if (this.session?.visibilityState !== 'visible') {
       this.poseFilter.reset(); this.profiler.reset();
-      if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; }
+      if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
       this.update({ tracking: 'Paused; session not visible' });
     }
   };

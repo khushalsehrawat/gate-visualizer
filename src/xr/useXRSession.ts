@@ -60,5 +60,5 @@ export function useXRSession(gate: GateImage | null) {
     const after = { ...presentation, before: false }; controller.current.setPresentation(after); setAppearance(after);
     void controller.current.start();
   }
-  return { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place: () => controller.current?.queuePlacement(), placeManual: () => controller.current?.queuePlacement(true), reset, reposition, lock: () => controller.current?.lockPlacement(), exit: () => { void controller.current?.exit(); } };
+  return { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place: () => controller.current?.queuePlacement(), undoLeft: () => controller.current?.undoLeftBase(), placeManual: () => controller.current?.queuePlacement(true), reset, reposition, lock: () => controller.current?.lockPlacement(), exit: () => { void controller.current?.exit(); } };
 }

@@ -31,12 +31,11 @@ export function entranceBasis(left: Vector3, right: Vector3) {
   return { matrix: new Matrix4().makeTranslation(origin.x, origin.y, origin.z).multiply(new Matrix4().makeRotationY(yaw)), distance, heightDifference: Math.abs(left.y - right.y) };
 }
 
-export function adjustedGateMatrix(base: Matrix4, relativeBasis: Matrix4, value: GateCalibration) {
-  const anchored = base.clone().multiply(relativeBasis);
-  const origin = new Vector3().setFromMatrixPosition(anchored);
-  const horizontal = new Vector3(1, 0, 0).transformDirection(anchored);
-  const yaw = Math.atan2(-horizontal.z, horizontal.x) + value.yaw * Math.PI / 180;
+export function adjustedGateMatrix(base: Matrix4, relativeBasis: Matrix4, value: GateCalibration, output = new Matrix4()) {
+  output.multiplyMatrices(base, relativeBasis);
+  const elements = output.elements;
+  const x = elements[12]! + value.x, y = elements[13]! + value.elevation, z = elements[14]! + value.z;
+  const yaw = Math.atan2(-elements[2]!, elements[0]!) + value.yaw * Math.PI / 180;
   // Anchor corrections can adjust pose; gravity-aligned world +Y stays vertical.
-  return new Matrix4().makeTranslation(origin.x + value.x, origin.y + value.elevation, origin.z + value.z)
-    .multiply(new Matrix4().makeRotationY(yaw));
+  return output.makeRotationY(yaw).setPosition(x, y, z);
 }

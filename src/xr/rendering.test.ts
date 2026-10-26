@@ -1,4 +1,4 @@
-import { Matrix4, Mesh, SRGBColorSpace } from 'three';
+import { LinearFilter, Matrix4, Mesh, SRGBColorSpace } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { defaultCalibration } from '../geometry/calibration';
 import type { GateImage } from '../gates/loadImage';
@@ -10,6 +10,21 @@ export function imageFixture(width = 640, height = 360): GateImage {
 }
 
 describe('gate world scene', () => {
+  it('bounds live texture resolution while preserving aspect ratio and original asset dimensions', () => {
+    const drawImage = vi.fn();
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D);
+    try {
+      const world = createTestScene(); const image = imageFixture(4096, 2048);
+      world.setGateImage(image); world.configureGate(defaultCalibration, true);
+      const gate = world.marker.children[1] as Mesh;
+      const texture = (gate.material as import('three').MeshBasicMaterial).map!;
+      expect(texture.image).toMatchObject({ width: 2048, height: 1024 });
+      expect(texture.generateMipmaps).toBe(false); expect(texture.minFilter).toBe(LinearFilter);
+      expect(drawImage).toHaveBeenCalledWith(image.image, 0, 0, 2048, 1024);
+      expect(image.asset.widthPixels).toBe(4096); expect(gate.scale.x / gate.scale.y).toBeCloseTo(2);
+      world.dispose();
+    } finally { context.mockRestore(); }
+  });
   it('uses an upright, alpha-aware sRGB texture and preserves the image aspect', () => {
     const world = createTestScene();
     world.setGateImage(imageFixture()); world.configureGate(defaultCalibration, true);

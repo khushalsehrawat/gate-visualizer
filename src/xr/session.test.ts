@@ -35,7 +35,7 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
   let loop: ((time: number, frame?: XRFrame) => void) | null = null;
   const renderer = {
     domElement: document.createElement('canvas'),
-    xr: { enabled: false, setReferenceSpaceType: vi.fn(), setReferenceSpace: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
+    xr: { enabled: false, setFramebufferScaleFactor: vi.fn(), setFoveation: vi.fn(), setReferenceSpaceType: vi.fn(), setReferenceSpace: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
     setAnimationLoop: vi.fn((callback) => { loop = callback; }), render: vi.fn(),
     dispose: vi.fn(), forceContextLoss: vi.fn(), setSize: vi.fn(), setPixelRatio: vi.fn(), setClearColor: vi.fn(),
   };
@@ -64,6 +64,17 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
 }
 
 describe('real XR session controller (mocked platform)', () => {
+  it('limits fluctuating surface status updates while still evaluating current XR hits', async () => {
+    const h = harness(); await h.controller.start();
+    h.frame({ time: 0, hit: true }); const count = h.statuses.length;
+    const frame = h.frame({ time: 20, hit: false });
+    expect(frame.getHitTestResults).toHaveBeenCalledOnce();
+    expect(h.statuses).toHaveLength(count);
+    h.frame({ time: 160, hit: false });
+    expect(h.status().hitTest).toBe('Scanning; no surface yet');
+    expect(h.statuses).toHaveLength(count + 1);
+    await h.controller.exit();
+  });
   it('requests immersive AR immediately and only once, with optional enhancements', async () => {
     const h = harness();
     const start = h.controller.start();
@@ -73,6 +84,9 @@ describe('real XR session controller (mocked platform)', () => {
     await h.controller.start(); await start;
     expect(h.requestSession).toHaveBeenCalledTimes(1);
     expect(h.renderer.xr.enabled).toBe(true);
+    expect(h.renderer.setPixelRatio).toHaveBeenCalledWith(1);
+    expect(h.renderer.xr.setFramebufferScaleFactor).toHaveBeenCalledWith(0.75);
+    expect(h.renderer.xr.setFramebufferScaleFactor.mock.invocationCallOrder[0]).toBeLessThan(h.renderer.xr.setSession.mock.invocationCallOrder[0]!);
     expect(h.renderer.xr.setReferenceSpace).toHaveBeenCalledWith(h.space);
     expect(h.status().session).toBe('running');
     await h.controller.exit();
@@ -311,6 +325,29 @@ function gateFixture(width = 640, height = 360): GateImage {
 }
 
 describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('shows the captured left point in world space and supports retaking without clearing dimensions', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture());
+    h.controller.setCalibration({ ...defaultCalibration, width: 4 }); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -2 });
+    const left = (h.renderer.render.mock.lastCall?.[0] as Scene).children[2]!;
+    expect(left.visible).toBe(true); expect(left.matrix.elements[12]).toBe(-2);
+    h.frame({ x: 5, hitX: 8 }); expect(left.matrix.elements[12]).toBe(-2);
+    h.controller.undoLeftBase(); expect(left.visible).toBe(false);
+    expect(h.status().calibration).toBe('Capture left pillar base');
+    h.controller.queuePlacement(); h.frame({ hitX: -1 });
+    h.controller.queuePlacement(); h.frame({ hitX: 3 });
+    expect(h.status().baseline).toBe(4); expect(left.visible).toBe(false);
+    await h.controller.exit();
+  });
+  it('skips hit-result reads after placement and resumes them on reposition', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
+    h.controller.queuePlacement(); h.frame({ hitX: 1.5 });
+    const placedFrame = h.frame(); expect(placedFrame.getHitTestResults).not.toHaveBeenCalled();
+    h.controller.reset(); const scanningFrame = h.frame({ time: 200 });
+    expect(scanningFrame.getHitTestResults).toHaveBeenCalledOnce();
+    await h.controller.exit();
+  });
   it('allows explicit manual placement when hit testing exists but finds no surface, without camera following', async () => {
     const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
     h.controller.queuePlacement(); h.frame({ hit: false });
