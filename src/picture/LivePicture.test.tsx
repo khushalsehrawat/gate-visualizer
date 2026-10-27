@@ -4,7 +4,7 @@ import LivePicture from './LivePicture';
 const f = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), request: vi.fn(), dispose: vi.fn(), show: vi.fn(), hide: vi.fn(), overlayDispose: vi.fn() }));
 const corners = [{ x: .1, y: .1 }, { x: .9, y: .1 }, { x: .9, y: .9 }, { x: .1, y: .9 }];
 vi.mock('../gates/GateProvider', () => ({ useGateLibrary: () => ({ gate: { asset: { name: 'Uploaded gate' } }, load: vi.fn(), loading: false, error: '' }) }));
-vi.mock('./camera', () => ({ PictureCamera: class { start = f.start; stop = f.stop; }, pictureFrame: () => ({ width: 400, height: 300, pixels: new Uint8ClampedArray(400 * 300 * 4) }) }));
+vi.mock('./camera', () => ({ PictureCamera: class { start = f.start; stop = f.stop; }, pictureFrame: () => ({ width: 400, height: 300, pixels: new Uint8ClampedArray(400 * 300 * 4) }), capturePictureFrame: async () => ({ width: 400, height: 300, pixels: new Uint8ClampedArray(400 * 300 * 4), blob: new Blob(['photo'], { type: 'image/png' }) }) }));
 vi.mock('./workerClient', () => ({ createPictureWorker: () => ({ request: f.request, dispose: f.dispose }) }));
 vi.mock('./overlay', () => ({ createPictureOverlay: () => ({ show: f.show, hide: f.hide, dispose: f.overlayDispose }) }));
 vi.mock('./ReviewGatePreview', () => ({ ReviewGatePreview: () => <div data-testid="frozen-fit-preview">Fitted preview on frozen frame</div> }));

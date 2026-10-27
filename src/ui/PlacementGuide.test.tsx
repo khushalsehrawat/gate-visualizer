@@ -19,8 +19,8 @@ describe('guided entrance bottom capture', () => {
   it('explains the saved left point and allows retaking it before right capture', () => {
     const capture = vi.fn(), undo = vi.fn();
     render(<PlacementGuide status={{ ...status, calibration: 'Capture right pillar base' }} hasGate onCapture={capture} onUndo={undo} />);
-    expect(screen.getByText(/Left bottom saved \(amber ring\)/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retake left bottom' })); expect(undo).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Left point saved \(amber ring\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retake left point' })); expect(undo).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'Capture right base' })); expect(capture).toHaveBeenCalledOnce();
   });
 });

@@ -35,3 +35,12 @@ it('keeps precise two-pillar fitting available only inside Fine Tune', async () 
   fireEvent.change(method, { target: { value: 'two-point' } }); expect(f.chooseMethod).toHaveBeenCalledWith('two-point');
   expect(screen.getByLabelText('World X offset (m)')).toBeInTheDocument();
 });
+it('shows recovery separately from device validation and never enables placement without a current hit', () => {
+  f.status = { ...f.status!, trackingRecovery: 'recovering', tracking: 'Lost; move slowly to recover', surfaceReady: false };
+  const { rerender } = render(<LivePreview />);
+  expect(screen.getByText('Reconnecting')).toBeInTheDocument(); expect(screen.getByRole('button', { name: 'Place Gate' })).toBeDisabled();
+  expect(screen.queryByText(/device.*unverified/i)).not.toBeInTheDocument();
+  f.status = { ...f.status!, placement: 'Placed on surface', tracking: 'Tracking', trackingRecovery: 'recovering' }; rerender(<LivePreview />);
+  expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+  expect(screen.getByText(/placement is kept/)).toBeInTheDocument();
+});

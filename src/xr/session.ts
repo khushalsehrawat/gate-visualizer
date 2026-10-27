@@ -10,6 +10,8 @@ import { WorldPoseFilter } from './stability';
 import { FrameProfiler } from './profiling';
 import type { FrameProfile } from './profiling';
 import { acquireXR, releaseHitSource, trackHitSource, trackXRSession, xrResourceCounts } from './resources';
+import { TrackingRecoveryNotice } from './recovery';
+import type { TrackingRecovery } from './recovery';
 
 export interface XRStatus {
   session: 'idle' | 'requesting' | 'starting' | 'running' | 'ending' | 'ended' | 'error';
@@ -27,16 +29,18 @@ export interface XRStatus {
   profile: FrameProfile | null;
   surfaceReady: boolean;
   gateReady: boolean;
+  trackingRecovery: TrackingRecovery;
 }
 export const initialXRStatus: XRStatus = {
   session: 'idle', tracking: 'Not started', referenceSpace: 'Not requested',
   hitTest: 'Not requested', anchors: 'Not requested', overlay: 'Not requested',
-  placement: 'Not placed', message: 'Physical-device behavior: UNVERIFIED. Start AR to test on Android.',
+  placement: 'Not placed', message: 'Start Live Preview to place your gate.',
   calibration: 'Capture left pillar base', baseline: null, locked: false,
   cameraFrames: 'Target camera pixels UNVERIFIED; separate pre-AR photo workflow selected.',
   profile: null,
   surfaceReady: false,
   gateReady: false,
+  trackingRecovery: 'searching',
 };
 
 export function sessionError(error: unknown): string {
@@ -56,6 +60,7 @@ export interface SessionOptions {
   mode?: 'gate' | 'marker';
   placementMethod?: 'single-point' | 'two-point';
   diagnostics?: boolean;
+  onAutoFit?: (calibration: GateCalibration, presentation: GatePresentation) => void;
 }
 
 export class XRSessionController {
@@ -95,6 +100,7 @@ export class XRSessionController {
   private releaseOwner: (() => void) | null = null;
   private ownerTransferred = false;
   private imageVersion = 0;
+  private recoveryNotice = new TrackingRecoveryNotice();
 
   setPresentation(value: GatePresentation) {
     if (!validPresentation(value) || (this.status.locked && value.fitting !== this.presentation.fitting)) return false;
@@ -167,6 +173,7 @@ export class XRSessionController {
     this.startPending = true;
     this.cancelled = false;
     this.profiler?.reset(); this.poseFilter.reset();
+    this.recoveryNotice.reset();
     this.update({ ...initialXRStatus, session: 'requesting', message: 'Allow Chrome to start immersive AR.' });
     try {
       const session = await this.options.xr.requestSession('immersive-ar', {
@@ -281,6 +288,8 @@ export class XRSessionController {
         if (anchorPose) { this.placementBase.fromArray(anchorPose.transform.matrix); world.marker.matrix.copy(this.placementBase); }
         if (this.status.anchors !== anchorStatus) this.update({ anchors: anchorStatus });
       }
+      const trackingRecovery = this.recoveryNotice.update(tracked && (!this.placed || world.marker.visible), time);
+      if (this.status.trackingRecovery !== trackingRecovery) this.update({ trackingRecovery });
       let hit: XRHitTestResult | undefined;
       let hitPose: XRPose | null = null;
       if (tracked && this.hitSource && (!this.placed || !this.status.locked)) {
@@ -373,17 +382,23 @@ export class XRSessionController {
         this.world.leftBase.matrix.makeTranslation(point.x, point.y + 0.005, point.z);
         this.world.leftBase.visible = true;
       }
-      this.update({ calibration: 'Capture right pillar base', message: 'LEFT base captured. Aim at the RIGHT pillar base at the same ground level and capture. Enter measured dimensions; a floor hit alone cannot determine the entrance plane.' });
+      this.update({ calibration: 'Capture right pillar base', message: 'Left point saved. Aim at the RIGHT ground edge at the same level and capture. Width fits automatically; height follows the gate image.' });
       return;
     }
     try {
       const basis = entranceBasis(this.leftPoint, point);
-      if (basis.heightDifference > 0.25) { this.update({ message: 'Base points differ by more than 25 cm in height. Reposition and select both pillar bases at the same level.' }); return; }
+      if (basis.heightDifference > 0.25) { this.update({ message: 'Points differ by more than 25 cm in height. Reposition and choose both ground edges at the same level.' }); return; }
       this.gateBasis.copy(matrix).invert().multiply(basis.matrix);
-      this.update({ baseline: basis.distance, calibration: 'Two spatial points captured; verify measured dimensions and alignment' });
+      // The selected horizontal span is the plane width, regardless of the old
+      // size/offset settings. Artwork height follows its natural proportions.
+      const fitted = { ...this.calibration, width: basis.distance, scale: 1, x: 0, z: 0, elevation: 0, yaw: 0 };
+      const appearance = { ...this.presentation, fitting: 'proportional' as const };
+      this.setCalibration(fitted); this.setPresentation(appearance);
+      this.options.onAutoFit?.({ ...fitted }, { ...appearance });
+      this.update({ baseline: basis.distance, calibration: 'Width fitted automatically between both selected points' });
       this.place(frame, matrix, hit, pose);
     } catch {
-      this.update({ message: 'Select a distinct RIGHT pillar base, 0.2–20 m from the left base. Use Reposition to restart.' });
+      this.update({ message: 'Select a distinct RIGHT ground point, 0.2–20 m from the left base. Use Reposition to restart.' });
     }
   }
 
@@ -399,7 +414,7 @@ export class XRSessionController {
     world.leftBase.visible = false;
     const version = ++this.placementVersion;
     if (this.singlePoint) this.update({ locked: true, surfaceReady: false });
-    this.update({ placement: pose ? 'Placed on surface' : 'Placed 1.5 m ahead (no surface alignment)', message: this.isGate ? (pose ? 'Gate positioned. Fine-tune measured dimensions, offsets and yaw from multiple viewpoints, then lock. Physical behavior UNVERIFIED.' : 'Approximate gate placed once 1.5 m ahead at camera height. Lower its base and adjust depth/rotation in Gate calibration & image. Check both pillars from the side, then lock. No surface depth was measured; physical behavior UNVERIFIED.') : 'Walk sideways and closer: the orange marker should stay in the world. Tap again to reset. Physical behavior UNVERIFIED.' });
+    this.update({ placement: pose ? 'Placed on surface' : 'Placed 1.5 m ahead (no surface alignment)', message: this.isGate ? (pose ? 'Gate placed. Walk around to check the fit; use Fine Tune if needed.' : 'Approximate gate placed 1.5 m ahead. Align height and direction in Fine Tune; no surface depth was measured.') : 'Walk sideways to check that the marker stays in the world. Tap again to reset.' });
     try {
       // Invoke anchor creation during the active XR frame, not in a later promise.
       const pending = hit?.createAnchor ? hit.createAnchor() : frame.createAnchor
@@ -442,8 +457,9 @@ export class XRSessionController {
     this.leftPoint = null;
     this.gateBasis.identity();
     this.poseFilter.reset();
+    this.recoveryNotice.reset();
     if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
-    this.update({ placement: 'Not placed', locked: false, surfaceReady: false, anchors: 'Waiting for placement', baseline: null, calibration: this.singlePoint ? 'Aim at entrance ground centre' : 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
+    this.update({ placement: 'Not placed', locked: false, surfaceReady: false, trackingRecovery: 'searching', anchors: 'Waiting for placement', baseline: null, calibration: this.singlePoint ? 'Aim at entrance ground centre' : 'Capture left pillar base', message: 'Placement cleared. Aim at the entrance to place again.' });
   };
 
   private onSelect = () => { if (this.status.locked || (this.singlePoint && this.session?.domOverlayState)) return; if (this.placed) { if (!this.isGate) this.reset(); } else this.queuePlacement(); };
@@ -452,6 +468,7 @@ export class XRSessionController {
     this.placeQueued = false; this.manualQueued = false;
     this.update({ surfaceReady: false });
     if (this.session?.visibilityState !== 'visible') {
+      this.recoveryNotice.reset(); this.update({ trackingRecovery: 'paused' });
       this.poseFilter.reset(); this.profiler?.reset();
       if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
       this.update({ tracking: 'Paused; session not visible' });
@@ -463,7 +480,7 @@ export class XRSessionController {
   private onEnd = () => {
     this.cancelled = true;
     // Let Three.js process the same end event before releasing rendering resources.
-    queueMicrotask(() => { if (!this.attachingRenderer) this.release(); this.update({ session: 'ended', tracking: 'Stopped', referenceSpace: 'Released', hitTest: 'Released', anchors: 'Released', overlay: 'Ended', placement: 'Not placed', message: 'AR session ended. Physical-device behavior remains UNVERIFIED.' }); });
+    queueMicrotask(() => { if (!this.attachingRenderer) this.release(); this.update({ session: 'ended', tracking: 'Stopped', referenceSpace: 'Released', hitTest: 'Released', anchors: 'Released', overlay: 'Ended', placement: 'Not placed', message: 'Preview closed.' }); });
   };
 
   async exit(): Promise<void> {
@@ -483,7 +500,7 @@ export class XRSessionController {
         return;
       }
       if (!this.attachingRenderer) this.release();
-      this.update({ session: 'ended', tracking: 'Stopped', referenceSpace: 'Released', hitTest: 'Released', anchors: 'Released', overlay: 'Ended', placement: 'Not placed', message: 'AR session ended. Physical-device behavior remains UNVERIFIED.' });
+      this.update({ session: 'ended', tracking: 'Stopped', referenceSpace: 'Released', hitTest: 'Released', anchors: 'Released', overlay: 'Ended', placement: 'Not placed', message: 'Preview closed.' });
     })();
     try { await this.endTask; } finally { this.endTask = null; }
   }
@@ -510,7 +527,8 @@ export class XRSessionController {
     this.placed = false; this.placeQueued = false; this.manualQueued = false;
     this.leftPoint = null;
     this.poseFilter.reset(); this.profiler?.reset();
-    this.update({ locked: false, surfaceReady: false, gateReady: false, profile: null, baseline: null, calibration: 'Capture left pillar base' });
+    this.recoveryNotice.reset();
+    this.update({ locked: false, surfaceReady: false, gateReady: false, trackingRecovery: 'searching', profile: null, baseline: null, calibration: 'Capture left pillar base' });
   }
 
   dispose() {

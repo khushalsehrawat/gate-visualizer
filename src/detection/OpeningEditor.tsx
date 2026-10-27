@@ -40,7 +40,7 @@ export function OpeningEditor({ photo, points, onChange, disabled, displayUrl, h
     </div>
     {!hideGuides && !!points.length && <div className="flex flex-wrap items-center gap-3">
       <label className="text-sm">Adjust corner <select className="rounded border bg-white p-2" value={Math.min(selected, points.length - 1)} disabled={disabled} onChange={(event) => setSelected(Number(event.currentTarget.value))}>{points.map((_, i) => <option value={i} key={i}>{cornerLabels[i]}</option>)}</select></label>
-      {active && <div role="img" aria-label={`${cornerLabels[selected]} magnifier at 3 times photo pixels`} className="opening-magnifier" style={{ backgroundImage: `url("${photo.url}")`, backgroundSize: `${photo.width * 3}px ${photo.height * 3}px`, backgroundPosition: `${70 - active.x * photo.width * 3}px ${70 - active.y * photo.height * 3}px` }}><span /></div>}
+      {active && <div role="img" aria-label={`${cornerLabels[selected]} magnifier, 3 times the analysis scale`} className="opening-magnifier" style={{ backgroundImage: `url("${photo.url}")`, backgroundSize: `${photo.width * 3}px ${photo.height * 3}px`, backgroundPosition: `${70 - active.x * photo.width * 3}px ${70 - active.y * photo.height * 3}px` }}><span /></div>}
       <div className="flex flex-wrap gap-2">
         <button className="action" disabled={disabled || !active} onClick={() => nudge(-5, 0)}>← 5 px</button>
         <button className="action" disabled={disabled || !active} onClick={() => nudge(5, 0)}>5 px →</button>

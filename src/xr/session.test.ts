@@ -42,9 +42,10 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
   const host = document.createElement('div');
   const overlayRoot = document.createElement('section');
   const statuses: XRStatus[] = [];
+  const onAutoFit = vi.fn();
   const rendererFactory = vi.fn(() => renderer as unknown as XRRenderer);
   const xr = { requestSession };
-  const controller = new XRSessionController({ xr, host, overlay: overlayRoot, onStatus: (status) => statuses.push(status), rendererFactory, mode, placementMethod, diagnostics });
+  const controller = new XRSessionController({ xr, host, overlay: overlayRoot, onStatus: (status) => statuses.push(status), onAutoFit, rendererFactory, mode, placementMethod, diagnostics });
   function frame({ time = 0, x = 0, hitX = 2, hitY = 0, tilt = false, hit = hitTest, tracking = true, emulated = false, anchorPose = true, createAnchor, frameAnchor }: { time?: number; x?: number; hitX?: number; hitY?: number; tilt?: boolean; hit?: boolean; tracking?: boolean; emulated?: boolean; anchorPose?: boolean; createAnchor?: () => Promise<XRAnchor>; frameAnchor?: (pose: XRRigidTransform, space: XRSpace) => Promise<XRAnchor> } = {}) {
     const hitMatrix = new Matrix4().makeTranslation(hitX, hitY, -2);
     if (tilt) hitMatrix.multiply(new Matrix4().makeRotationX(-Math.PI / 2));
@@ -62,7 +63,7 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
   }
   function marker(): Group { return (renderer.render.mock.lastCall?.[0] as Scene).children[0] as Group; }
   function reticle() { return (renderer.render.mock.lastCall?.[0] as Scene).children[1]!; }
-  return { controller, session, space, source, requestSession, xr, renderer, rendererFactory, host, overlayRoot, frame, marker, reticle, runFrame: (frame: XRFrame) => loop?.(32, frame), statuses, status: () => statuses.at(-1) ?? initialXRStatus };
+  return { controller, session, space, source, requestSession, xr, renderer, rendererFactory, host, overlayRoot, frame, marker, reticle, onAutoFit, runFrame: (frame: XRFrame) => loop?.(32, frame), statuses, status: () => statuses.at(-1) ?? initialXRStatus };
 }
 
 describe('real XR session controller (mocked platform)', () => {
@@ -360,6 +361,18 @@ function gateFixture(width = 640, height = 360): GateImage {
 }
 
 describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('fits the gate exactly between two arbitrary ground points, clearing stale size and offsets', async () => {
+    const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture());
+    h.controller.setCalibration({ ...defaultCalibration, width: 9, scale: 2, x: 3, z: 1, elevation: .5, yaw: 40 });
+    await h.controller.start();
+    h.controller.queuePlacement(); h.frame({ hitX: -2 }); h.controller.queuePlacement(); h.frame({ hitX: 3 });
+    const gate = h.marker().children[1] as Mesh;
+    expect(gate.scale.x).toBeCloseTo(5); expect(gate.scale.y).toBeCloseTo(5 * 360 / 640);
+    expect(h.marker().matrix.elements[12]).toBeCloseTo(.5);
+    expect(h.marker().matrix.elements[13]).toBeCloseTo(0); expect(h.marker().matrix.elements[14]).toBeCloseTo(-2);
+    expect(h.onAutoFit).toHaveBeenCalledWith(expect.objectContaining({ width: 5, scale: 1, x: 0, z: 0, elevation: 0, yaw: 0 }), expect.objectContaining({ fitting: 'proportional' }));
+    await h.controller.exit();
+  });
   it('does not get stuck preparing a gate when the same pending resize is applied twice', async () => {
     const pending = deferred<ImageBitmap>(); vi.stubGlobal('createImageBitmap', vi.fn(() => pending.promise));
     try {

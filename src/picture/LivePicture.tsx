@@ -5,7 +5,7 @@ import { cornerLabels, validateQuad } from '../detection/geometry';
 import type { Point, Quad } from '../detection/geometry';
 import type { OpeningPhoto } from '../detection/photo';
 import { runDetection } from '../detection/client';
-import { PictureCamera, pictureFrame } from './camera';
+import { capturePictureFrame, PictureCamera, pictureFrame } from './camera';
 import { createPictureWorker } from './workerClient';
 import type { createPictureOverlay } from './overlay';
 import { PictureHealth, pictureEvidenceLifetime } from './health';
@@ -70,8 +70,8 @@ export default function LivePicture({ onActiveChange }: { onActiveChange?: (acti
     releaseTracking(); setError(''); setDetecting(false);
     try {
       const canvas = sampling.current ??= document.createElement('canvas');
-      const frame = pictureFrame(video.current, canvas), version = generation.current;
-      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Could not freeze the camera frame.')), 'image/png'));
+      const version = generation.current;
+      const { blob, ...frame } = await capturePictureFrame(video.current, canvas);
       if (generation.current !== version) return;
       if (frozenUrl.current) URL.revokeObjectURL(frozenUrl.current);
       const url = URL.createObjectURL(blob); frozenUrl.current = url;

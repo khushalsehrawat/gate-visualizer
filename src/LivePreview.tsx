@@ -24,7 +24,8 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
   const busy = ['requesting', 'starting', 'running', 'ending'].includes(status.session);
   const placed = status.placement !== 'Not placed';
   const ready = status.session === 'running' && status.surfaceReady && status.tracking === 'Tracking' && !!gate && status.gateReady && !loading;
-  const trackingLabel = placed && status.tracking === 'Tracking' && status.anchors !== 'Anchor pose unavailable; marker hidden' ? 'Gate Placed' : ready ? 'Ready to Place' : 'Finding Surface';
+  const reconnecting = status.trackingRecovery === 'recovering' || status.trackingRecovery === 'paused';
+  const trackingLabel = reconnecting ? (status.trackingRecovery === 'paused' ? 'Hold still to reconnect' : 'Reconnecting') : placed && status.tracking === 'Tracking' && status.anchors !== 'Anchor pose unavailable; marker hidden' ? 'Gate Placed' : ready ? 'Ready to Place' : 'Finding Surface';
   const needsAttention = status.session === 'error' || /distinct RIGHT|25 cm|Placement paused|No surface at|reference space reset|Could not|WebGL context lost/.test(status.message);
   useEffect(() => { onActiveChange?.(busy); return () => { onActiveChange?.(false); }; }, [busy, onActiveChange]);
   useEffect(() => {
@@ -53,8 +54,8 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
       {busy && <header className="xr-overlay-header"><span role="status">{trackingLabel}</span><button className="action" aria-label="Exit AR" onClick={exit}>Close</button></header>}
       <div className="xr-control-card">
         {needsAttention && <p role="alert" className="form-error">{status.message}</p>}
-        {busy && !placed && <p className="xr-guidance">{!gate ? 'Select your gate to begin.' : loading || !status.gateReady ? 'Preparing your gate…' : !ready ? 'Aim at the ground in the middle of the entrance. Move slowly over a textured, well-lit area.' : 'Align the preview, then tap Place Gate. Use Fine Tune for measured pillar alignment.'}</p>}
-        {busy && placed && <p className="xr-guidance">{trackingLabel === 'Gate Placed' ? 'Walk around to preview your gate.' : 'Tracking interrupted. Move slowly to recover; the gate stays hidden until its pose is valid.'}</p>}
+        {busy && !placed && <p className="xr-guidance">{!gate ? 'Select your gate to begin.' : loading || !status.gateReady ? 'Preparing your gate…' : placementMethod === 'two-point' ? 'Set a left point and a right point. Your gate fits between them automatically.' : !ready ? 'Aim at the ground in the middle of the entrance. Move slowly over a textured, well-lit area.' : 'Align the preview, then tap Place Gate.'}</p>}
+        {busy && placed && <p className="xr-guidance">{trackingLabel === 'Gate Placed' ? 'Walk around to preview your gate.' : 'Reconnecting to the entrance. Hold steady; your placement is kept. The gate hides whenever its pose is unavailable.'}</p>}
         {busy && <div className="xr-primary-actions">
           <button className="action" disabled={loading} onClick={() => fileInput.current?.click()}>{placed ? 'Change Gate' : 'Select Gate'}</button>
           {!placed && mode === 'gate' && placementMethod === 'single-point' && <button className="action xr-place-button" disabled={!ready} onClick={place}>Place Gate</button>}
@@ -62,7 +63,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
           {mode === 'marker' && !placed && <button className="action" disabled={!ready} onClick={place}>Place marker</button>}
         </div>}
         {busy && mode === 'gate' && placementMethod === 'two-point' && <PlacementGuide status={status} hasGate={!!gate} onCapture={place} onUndo={undoLeft} />}
-        {busy && !placed && <label className="xr-size-control">Size<input aria-label="Size" type="range" min="0.1" max="3" step="0.01" value={calibration.scale} onChange={(event) => configure({ ...calibration, scale: event.currentTarget.valueAsNumber })} /></label>}
+        {busy && !placed && placementMethod === 'single-point' && <label className="xr-size-control">Size<input aria-label="Size" type="range" min="0.1" max="3" step="0.01" value={calibration.scale} onChange={(event) => configure({ ...calibration, scale: event.currentTarget.valueAsNumber })} /></label>}
         {placed && (loading || (!!gate && !status.gateReady)) && <p role="status">Preparing gate…</p>}
         {error && <p role="alert" className="form-error">{error}</p>}
         {!placed && status.session === 'running' && !ready && <button className="text-link" onClick={() => setManualReview(true)}>No surface? Place manually</button>}
@@ -71,11 +72,11 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
           {fineTune && <>
             <p className="fine-print">Size defaults are estimates. Enter measurements for accurate fitting. A ground point supplies position; it does not detect your complete entrance.</p>
             {placed && <button className="action" onClick={lock}>{status.locked ? 'Unlock adjustments' : 'Lock adjustments'}</button>}
-            {!placed && <label className="field-label">Placement method<select value={placementMethod} onChange={(event) => chooseMethod?.(event.currentTarget.value as 'single-point' | 'two-point')}><option value="single-point">Simple — entrance centre</option><option value="two-point">Precise — left and right pillar bases</option></select></label>}
+            {!placed && <label className="field-label">Placement method<select value={placementMethod} onChange={(event) => chooseMethod?.(event.currentTarget.value as 'single-point' | 'two-point')}><option value="single-point">Simple — entrance centre</option><option value="two-point">Left/right points — automatic width</option></select></label>}
             <div className="button-row"><button className="action" disabled={status.locked || (!ready && !placed)} onClick={() => horizontal(-.05)}>Move left</button><button className="action" disabled={status.locked || (!ready && !placed)} onClick={() => horizontal(.05)}>Move right</button><button className="action" disabled={status.locked} onClick={() => configure({ ...calibration, yaw: Math.max(-360, calibration.yaw - 5) })}>Rotate left</button><button className="action" disabled={status.locked} onClick={() => configure({ ...calibration, yaw: Math.min(360, calibration.yaw + 5) })}>Rotate right</button></div>
             <GateControls config={calibration} onChange={configure} gate={gate} loading={loading} error="" onImage={load} locked={status.locked} baseline={status.baseline} onHorizontal={horizontal} canNudge={ready || placed} fitting={presentation.fitting} />
             <PresentationControls gate={gate} calibration={calibration} value={presentation} onChange={present} onCatalogue={(asset) => { void load(undefined, asset); }} loading={loading} locked={status.locked} canCompare={status.session === 'running' && placed} />
-            {opening && <p className="fine-print">Photo boundaries user-confirmed ({opening.source}). Measured envelope {opening.width.toFixed(2)} × {opening.height.toFixed(2)} m was applied. Photo pixels have not supplied a world pose or depth. Use precise pillar alignment at the same entrance.</p>}
+            {opening && <p className="fine-print">Photo boundaries user-confirmed ({opening.source}). Measured envelope {opening.width.toFixed(2)} × {opening.height.toFixed(2)} m was applied. Photo pixels have not supplied a world pose or depth. Select the left and right ground points at the same entrance.</p>}
             {!busy && <details className="optional-photo-tools"><summary>Auto-detect opening points & confirm all four</summary><OpeningDetection arActive={false} locked={status.locked} onBusy={setPhotoBusy} onConfirm={confirmOpening} /></details>}
             {!busy && <label className="field-label">AR mode<select value={mode} onChange={(event) => setMode(event.currentTarget.value as 'gate' | 'marker')}><option value="gate">Gate</option><option value="marker">Diagnostic marker</option></select></label>}
             <button className="text-link" onClick={reset}>Reset all settings</button>

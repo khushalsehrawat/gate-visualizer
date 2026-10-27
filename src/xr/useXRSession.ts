@@ -13,7 +13,7 @@ export function useXRSession(gate: GateImage | null) {
   const controllerMode = useRef('');
   const [status, setStatus] = useState(initialXRStatus);
   const [mode, setMode] = useState<'gate' | 'marker'>('gate');
-  const [placementMethod, setMethod] = useState<'single-point' | 'two-point'>('single-point');
+  const [placementMethod, setMethod] = useState<'single-point' | 'two-point'>('two-point');
   const [calibration, setConfig] = useState<GateCalibration>({ ...defaultCalibration });
   const [presentation, setAppearance] = useState<GatePresentation>({ ...defaultPresentation });
   useEffect(() => () => { controller.current?.dispose(); controller.current = null; }, []);
@@ -59,7 +59,7 @@ export function useXRSession(gate: GateImage | null) {
     }
     if (controllerMode.current !== mode) { controller.current?.dispose(); controller.current = null; }
     controllerMode.current = mode;
-    controller.current ??= new XRSessionController({ xr: navigator.xr, host: hostRef.current, overlay: overlayRef.current, onStatus: setStatus, mode, placementMethod });
+    controller.current ??= new XRSessionController({ xr: navigator.xr, host: hostRef.current, overlay: overlayRef.current, onStatus: setStatus, mode, placementMethod, onAutoFit: (next, appearance) => { setConfig(next); setAppearance(appearance); } });
     controller.current.setPlacementMethod(placementMethod);
     if (gate) controller.current.setGateImage(gate);
     controller.current.setCalibration(calibration);
