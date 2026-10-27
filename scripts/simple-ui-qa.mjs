@@ -41,7 +41,8 @@ try {
   if (await evaluate(`document.querySelector('.picture-camera video').srcObject!==null`)) throw new Error('Camera stream still attached');
   await evaluate(`location.hash='/live'`); await until(`!!document.querySelector('.live-workspace')`);
   if (!await evaluate(`document.querySelector('.preview-mode-picker').classList.contains('is-compact')`)) throw new Error('Camera mode selector not compact');
-  if (await evaluate(`document.querySelector('.optional-photo-tools').open || document.querySelector('.xr-more').open`)) throw new Error('Optional tools expanded by default');
+  if (await evaluate(`document.querySelector('.optional-photo-tools')?.open || document.querySelector('.xr-more').open`)) throw new Error('Optional tools expanded by default');
+  if (await evaluate(`document.querySelector('.session-diagnostics')!==null`)) throw new Error('Production developer diagnostics visible');
   await shot('simple-live-setup');
   console.log('PASS: mobile navigation, camera start/stop, separate manual region, GPU auto-fit preview before live tracking, four-point confirmation retained, collapsed settings, no horizontal overflow. Physical Android XR remains unverified.');
 } finally { socket.close(); }

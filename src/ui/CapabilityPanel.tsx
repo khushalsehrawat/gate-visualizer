@@ -3,8 +3,8 @@ import type { CapabilityResult } from '../capabilities/detect';
 export function CapabilityPanel({ result, onRetry, onStart, busy }: { result: CapabilityResult; onRetry: () => void; onStart: () => void; busy: boolean }) {
   return <section className="panel p-5" aria-labelledby="capability-title">
     <h2 id="capability-title" className="sr-only">Open your live camera</h2>
-    <button className="action w-full" aria-label="Start AR" disabled={result.status !== 'supported' || busy} onClick={onStart} aria-describedby="launch-reason">Open live camera</button>
-    <p id="launch-reason" className="my-3 text-sm">Scan the ground. Select the left bottom, then the right bottom.</p>
+    <button className="action w-full" aria-label="Start AR" disabled={result.status !== 'supported' || busy} onClick={onStart} aria-describedby="launch-reason">Start Live Preview</button>
+    <p id="launch-reason" className="my-3 text-sm">Point at the entrance ground, select a gate, then tap Place Gate.</p>
     {result.status !== 'supported' && <p role="status" className="my-3 text-sm">{result.message}</p>}
     <details className="simple-options"><summary>Device information</summary>
     <div role="status" aria-live="polite" className="my-5 rounded-xl bg-slate-100 p-4">

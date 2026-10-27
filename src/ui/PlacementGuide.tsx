@@ -8,7 +8,7 @@ interface Props {
 export function PlacementGuide({ status, hasGate, onCapture, onUndo }: Props) {
   if (status.session !== 'running' || status.placement !== 'Not placed') return null;
   const right = status.calibration === 'Capture right pillar base';
-  const ready = status.hitTest === 'Surface found' && status.tracking.startsWith('Tracking');
+  const ready = status.surfaceReady && status.gateReady && status.hitTest === 'Surface found' && status.tracking === 'Tracking';
   const unavailable = status.hitTest.startsWith('Unavailable');
   return <div className="placement-guide" aria-label="Entrance bottom point capture">
     <ol className="placement-progress" aria-label="Placement progress">

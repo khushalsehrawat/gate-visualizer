@@ -13,6 +13,7 @@ export function useXRSession(gate: GateImage | null) {
   const controllerMode = useRef('');
   const [status, setStatus] = useState(initialXRStatus);
   const [mode, setMode] = useState<'gate' | 'marker'>('gate');
+  const [placementMethod, setMethod] = useState<'single-point' | 'two-point'>('single-point');
   const [calibration, setConfig] = useState<GateCalibration>({ ...defaultCalibration });
   const [presentation, setAppearance] = useState<GatePresentation>({ ...defaultPresentation });
   useEffect(() => () => { controller.current?.dispose(); controller.current = null; }, []);
@@ -31,6 +32,10 @@ export function useXRSession(gate: GateImage | null) {
   function horizontal(step: number) {
     const next = controller.current?.nudgeHorizontal(step);
     if (next) setConfig(next);
+  }
+  function chooseMethod(next: 'single-point' | 'two-point') {
+    if (controller.current && !controller.current.setPlacementMethod(next)) return;
+    setMethod(next);
   }
 
   function reposition() {
@@ -54,11 +59,12 @@ export function useXRSession(gate: GateImage | null) {
     }
     if (controllerMode.current !== mode) { controller.current?.dispose(); controller.current = null; }
     controllerMode.current = mode;
-    controller.current ??= new XRSessionController({ xr: navigator.xr, host: hostRef.current, overlay: overlayRef.current, onStatus: setStatus, mode });
+    controller.current ??= new XRSessionController({ xr: navigator.xr, host: hostRef.current, overlay: overlayRef.current, onStatus: setStatus, mode, placementMethod });
+    controller.current.setPlacementMethod(placementMethod);
     if (gate) controller.current.setGateImage(gate);
     controller.current.setCalibration(calibration);
     const after = { ...presentation, before: false }; controller.current.setPresentation(after); setAppearance(after);
     void controller.current.start();
   }
-  return { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place: () => controller.current?.queuePlacement(), undoLeft: () => controller.current?.undoLeftBase(), placeManual: () => controller.current?.queuePlacement(true), reset, reposition, lock: () => controller.current?.lockPlacement(), exit: () => { void controller.current?.exit(); } };
+  return { status, hostRef, overlayRef, mode, setMode, placementMethod, chooseMethod, calibration, configure, presentation, present, horizontal, start, place: () => controller.current?.queuePlacement(), undoLeft: () => controller.current?.undoLeftBase(), placeManual: () => controller.current?.queuePlacement(true), reset, reposition, lock: () => controller.current?.lockPlacement(), exit: () => { void controller.current?.exit(); } };
 }

@@ -10,6 +10,30 @@ export function imageFixture(width = 640, height = 360): GateImage {
 }
 
 describe('gate world scene', () => {
+  it('resizes large images asynchronously, preserves orientation and closes owned bitmaps on switching', async () => {
+    const bitmap = { width: 2048, height: 1024, close: vi.fn() } as unknown as ImageBitmap;
+    const resize = vi.fn().mockResolvedValue(bitmap); vi.stubGlobal('createImageBitmap', resize);
+    try {
+      const world = createTestScene(); world.setGateImage(imageFixture());
+      const material = (world.marker.children[1] as Mesh).material as import('three').MeshBasicMaterial;
+      const version = material.version;
+      await world.setGateImage(imageFixture(4096, 2048));
+      expect(resize).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ resizeWidth: 2048, resizeHeight: 1024, imageOrientation: 'flipY', premultiplyAlpha: 'none' }));
+      expect(material.map!.flipY).toBe(false); expect(material.version).toBe(version); expect(world.gateReady).toBe(true);
+      world.setGateImage(imageFixture()); expect(bitmap.close).toHaveBeenCalledOnce(); world.dispose();
+      expect(bitmap.close).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('closes a late resized bitmap after the AR scene has been disposed', async () => {
+    let finish!: (bitmap: ImageBitmap) => void;
+    vi.stubGlobal('createImageBitmap', vi.fn(() => new Promise<ImageBitmap>((resolve) => { finish = resolve; })));
+    try {
+      const world = createTestScene(); const pending = world.setGateImage(imageFixture(4096, 2048));
+      expect(world.gateReady).toBe(false); world.dispose();
+      const bitmap = { close: vi.fn() } as unknown as ImageBitmap; finish(bitmap); await pending;
+      expect(bitmap.close).toHaveBeenCalledOnce(); expect(world.scene.children).toHaveLength(0);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('bounds live texture resolution while preserving aspect ratio and original asset dimensions', () => {
     const drawImage = vi.fn();
     const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D);

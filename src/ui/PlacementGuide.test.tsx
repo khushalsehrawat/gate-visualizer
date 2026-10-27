@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PlacementGuide } from './PlacementGuide';
 import { initialXRStatus } from '../xr/session';
 
-const status = { ...initialXRStatus, session: 'running' as const, tracking: 'Tracking (device UNVERIFIED)', hitTest: 'Surface found' };
+const status = { ...initialXRStatus, session: 'running' as const, tracking: 'Tracking', hitTest: 'Surface found', surfaceReady: true, gateReady: true };
 describe('guided entrance bottom capture', () => {
   it('enables capture only for a real tracked surface and a loaded gate', () => {
     const capture = vi.fn(), undo = vi.fn();

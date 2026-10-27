@@ -27,7 +27,7 @@ export function OpeningDetection({ arActive, locked, onBusy, onConfirm }: Props)
   const generation = useRef(0);
   const ownedUrl = useRef<string | null>(null);
   const task = useRef<ReturnType<typeof runDetection> | null>(null);
-  useEffect(() => () => { generation.current += 1; task.current?.cancel(); if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current); }, []);
+  useEffect(() => () => { generation.current += 1; task.current?.cancel(); onBusy(false); if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current); }, [onBusy]);
   const disabled = arActive || locked;
   function clearConfirmation() { setConfirmed(false); setReviewed([false, false, false, false]); onConfirm(null); }
   function updatePoints(next: Point[]) { setPoints(next); setSource('manual'); clearConfirmation(); }

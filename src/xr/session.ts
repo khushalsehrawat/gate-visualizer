@@ -9,6 +9,7 @@ import type { GatePresentation } from '../gates/presentation';
 import { WorldPoseFilter } from './stability';
 import { FrameProfiler } from './profiling';
 import type { FrameProfile } from './profiling';
+import { acquireXR, releaseHitSource, trackHitSource, trackXRSession, xrResourceCounts } from './resources';
 
 export interface XRStatus {
   session: 'idle' | 'requesting' | 'starting' | 'running' | 'ending' | 'ended' | 'error';
@@ -24,6 +25,8 @@ export interface XRStatus {
   locked: boolean;
   cameraFrames: string;
   profile: FrameProfile | null;
+  surfaceReady: boolean;
+  gateReady: boolean;
 }
 export const initialXRStatus: XRStatus = {
   session: 'idle', tracking: 'Not started', referenceSpace: 'Not requested',
@@ -32,6 +35,8 @@ export const initialXRStatus: XRStatus = {
   calibration: 'Capture left pillar base', baseline: null, locked: false,
   cameraFrames: 'Target camera pixels UNVERIFIED; separate pre-AR photo workflow selected.',
   profile: null,
+  surfaceReady: false,
+  gateReady: false,
 };
 
 export function sessionError(error: unknown): string {
@@ -49,6 +54,8 @@ export interface SessionOptions {
   onStatus: (status: XRStatus) => void;
   rendererFactory?: () => XRRenderer;
   mode?: 'gate' | 'marker';
+  placementMethod?: 'single-point' | 'two-point';
+  diagnostics?: boolean;
 }
 
 export class XRSessionController {
@@ -77,8 +84,17 @@ export class XRSessionController {
   private gateTarget = new Matrix4();
   private presentation: GatePresentation = { ...defaultPresentation };
   private poseFilter = new WorldPoseFilter();
-  private profiler = new FrameProfiler();
-  private lastHitReport = -Infinity;
+  private profiler: FrameProfiler | null;
+  private hitMatrix = new Matrix4();
+  private viewerMatrix = new Matrix4();
+  private upright = new Matrix4();
+  private previewBasis = new Matrix4();
+  private hitPosition = new Vector3();
+  private viewerPosition = new Vector3();
+  private placementMethod: 'single-point' | 'two-point';
+  private releaseOwner: (() => void) | null = null;
+  private ownerTransferred = false;
+  private imageVersion = 0;
 
   setPresentation(value: GatePresentation) {
     if (!validPresentation(value) || (this.status.locked && value.fitting !== this.presentation.fitting)) return false;
@@ -89,11 +105,22 @@ export class XRSessionController {
   }
 
   private get isGate() { return this.options.mode === 'gate'; }
+  private get singlePoint() { return this.isGate && this.placementMethod === 'single-point'; }
+  setPlacementMethod(method: 'single-point' | 'two-point') {
+    if (this.placed) return false;
+    this.placementMethod = method; this.reset(); return true;
+  }
 
   setGateImage(image: GateImage) {
     this.gateImage = image;
-    this.world?.setGateImage(image);
-    this.world?.configureGate(this.calibration, this.isGate);
+    const world = this.world;
+    if (!world) return;
+    const version = ++this.imageVersion;
+    const pending = world.setGateImage(image);
+    world.configureGate(this.calibration, this.isGate);
+    this.update({ gateReady: world.gateReady });
+    if (pending) void pending.then(() => { if (world === this.world && version === this.imageVersion) this.update({ gateReady: world.gateReady }); })
+      .catch(() => { if (world === this.world && version === this.imageVersion) this.update({ gateReady: false, message: 'Could not prepare the gate texture. Choose a smaller PNG/JPG/WebP and retry.' }); });
   }
 
   setCalibration(value: GateCalibration) {
@@ -105,7 +132,7 @@ export class XRSessionController {
   }
 
   nudgeHorizontal(meters: number): GateCalibration | null {
-    if (!this.isGate || !this.placed || !this.world || !Number.isFinite(meters) || Math.abs(meters) > 0.1) return null;
+    if (!this.isGate || (!this.placed && !(this.singlePoint && this.status.surfaceReady)) || !this.world || !Number.isFinite(meters) || Math.abs(meters) > 0.1) return null;
     const direction = new Vector3(1, 0, 0).transformDirection(this.world.marker.matrix);
     const next = { ...this.calibration, x: this.calibration.x + direction.x * meters, z: this.calibration.z + direction.z * meters };
     return this.setCalibration(next) ? next : null;
@@ -114,14 +141,19 @@ export class XRSessionController {
   lockPlacement() {
     if (!this.placed || this.status.session !== 'running') return;
     this.placeQueued = false;
-    this.update({ locked: !this.status.locked, message: this.status.locked ? 'Unlocked. Adjust the gate while observing both pillars.' : 'Placement locked. Tracking remains active; edits and XR taps are ignored until unlocked. Image replacement is still allowed.' });
+    this.update({ locked: !this.status.locked, surfaceReady: false, message: this.status.locked ? 'Unlocked. Adjust the gate while observing both pillars.' : 'Placement locked. Tracking remains active; edits and XR taps are ignored until unlocked. Image replacement is still allowed.' });
   }
 
-  constructor(private readonly options: SessionOptions) {}
+  constructor(private readonly options: SessionOptions) {
+    this.placementMethod = options.placementMethod ?? 'two-point';
+    this.profiler = (options.diagnostics ?? import.meta.env.DEV) ? new FrameProfiler() : null;
+  }
 
   private update(patch: Partial<XRStatus>) {
     if (this.disposed) return;
-    if (Object.entries(patch).every(([key, value]) => this.status[key as keyof XRStatus] === value)) return;
+    let changed = false;
+    for (const key in patch) if (this.status[key as keyof XRStatus] !== patch[key as keyof XRStatus]) { changed = true; break; }
+    if (!changed) return;
     this.status = { ...this.status, ...patch };
     this.options.onStatus(this.status);
   }
@@ -129,10 +161,12 @@ export class XRSessionController {
   // Called directly from the Start AR click: no await before requestSession.
   async start(): Promise<void> {
     if (this.disposed || this.startPending || this.endTask || this.session) return;
+    this.releaseOwner = acquireXR(this.options.xr);
+    if (!this.releaseOwner) { this.update({ session: 'error', message: 'Another XR session is starting or ending. Exit it before starting again.' }); return; }
+    this.ownerTransferred = false;
     this.startPending = true;
     this.cancelled = false;
-    this.profiler.reset(); this.poseFilter.reset();
-    this.lastHitReport = -Infinity;
+    this.profiler?.reset(); this.poseFilter.reset();
     this.update({ ...initialXRStatus, session: 'requesting', message: 'Allow Chrome to start immersive AR.' });
     try {
       const session = await this.options.xr.requestSession('immersive-ar', {
@@ -141,6 +175,8 @@ export class XRSessionController {
         domOverlay: { root: this.options.overlay },
       });
       this.session = session;
+      trackXRSession(session, this.releaseOwner);
+      this.ownerTransferred = true;
       session.addEventListener('end', this.onEnd);
       if (this.disposed || this.cancelled) { await this.exit(); return; }
       this.update({ session: 'starting', overlay: session.domOverlayState ? 'Enabled' : 'Unavailable; use XR taps and browser exit' });
@@ -162,6 +198,7 @@ export class XRSessionController {
       this.referenceSpace = referenceSpace;
       this.referenceSpace.addEventListener('reset', this.onReferenceReset);
       this.update({ referenceSpace: this.referenceType });
+      const hitTestReady = this.setupHitTest(session);
       // Load the WebGL renderer only after the gesture has requested a native session.
       const { createTestScene, createXRRenderer } = await import('./rendering');
       if (!this.isCurrent(session)) return;
@@ -179,7 +216,7 @@ export class XRSessionController {
       renderer.domElement.addEventListener('webglcontextlost', this.onContextLost);
       this.world = createTestScene();
       this.world.setPresentation(this.presentation);
-      if (this.gateImage) this.world.setGateImage(this.gateImage);
+      if (this.gateImage) this.setGateImage(this.gateImage);
       this.world.configureGate(this.calibration, this.isGate);
       this.attachingRenderer = true;
       try { await renderer.xr.setSession(session); }
@@ -188,9 +225,11 @@ export class XRSessionController {
       // Rendering, hit poses and anchor poses use exactly the same space.
       renderer.xr.setReferenceSpace(this.referenceSpace);
       renderer.xr.setFoveation?.(1);
-      this.update({ session: 'running', tracking: 'Waiting for viewer pose', anchors: session.enabledFeatures?.includes('anchors') ? 'Enabled; waiting for placement' : 'Not confirmed; world-space fallback available', message: this.isGate ? 'Scan the entrance floor. Aim at the LEFT pillar base and capture, then the RIGHT base. These are real XR hits, not image corners.' : 'Move slowly and scan a textured, well-lit surface. Aim the teal ring, then tap to place the orange marker.' });
+      this.update({ cameraFrames: cameraFrameStatus(session, undefined), ...(this.singlePoint ? { calibration: 'Aim at entrance ground centre' } : {}) });
+      this.update({ session: 'running', tracking: 'Waiting for viewer pose', anchors: session.enabledFeatures?.includes('anchors') ? 'Enabled; waiting for placement' : 'Not confirmed; world-space fallback available', message: this.singlePoint ? 'Aim at the entrance ground centre, select a gate, then Place Gate. Fine Tune retains measured pillar alignment.' : this.isGate ? 'Scan the entrance floor. Aim at the LEFT pillar base and capture, then the RIGHT base. These are real XR hits, not image corners.' : 'Move slowly and scan a textured, well-lit surface. Aim the teal ring, then tap to place the orange marker.' });
       renderer.setAnimationLoop(this.onFrame);
-      await this.setupHitTest(session);
+      await hitTestReady;
+      if (this.isCurrent(session) && this.status.hitTest.startsWith('Unavailable')) this.update({ message: 'Surface detection is unavailable. Manual placement is not depth-calibrated; align height and direction in Fine Tune.' });
     } catch (error) {
       if (this.disposed || this.cancelled) return;
       const message = sessionError(error);
@@ -199,12 +238,14 @@ export class XRSessionController {
     } finally {
       this.startPending = false;
       if (this.cancelled && this.status.session !== 'running') this.release();
+      if (!this.session && !this.ownerTransferred) { this.releaseOwner?.(); this.releaseOwner = null; }
     }
   }
 
   private isCurrent(session: XRSession) { return this.session === session && !this.cancelled && !this.disposed; }
 
   private async setupHitTest(session: XRSession) {
+    if (this.hitSource) return;
     try {
       if (!session.requestHitTestSource) throw new Error('No hit-test API');
       const viewer = await session.requestReferenceSpace('viewer');
@@ -213,6 +254,7 @@ export class XRSessionController {
       if (!source) throw new Error('No hit-test source');
       if (!this.isCurrent(session)) { source.cancel(); return; }
       this.hitSource = source;
+      trackHitSource(source);
       this.update({ hitTest: 'Scanning; no surface yet' });
     } catch {
       if (this.isCurrent(session)) this.update({ hitTest: 'Unavailable; fixed-distance fallback', message: this.isGate ? 'No hit testing: tap for an approximate vertical gate 1.5 m ahead at viewer height. Manually lower its base, adjust depth/yaw, and verify from the side. This is not depth-calibrated.' : 'Surface hit testing is unavailable. Tap to place once, 1.5 m ahead in world space. This fallback is not surface-aligned.' });
@@ -223,36 +265,47 @@ export class XRSessionController {
     const { session, referenceSpace: space, renderer, world } = this;
     if (!frame || !session || !space || !renderer || !world || this.status.session !== 'running') return;
     try {
-      const cpuStart = performance.now();
+      const cpuStart = this.profiler ? performance.now() : 0;
       const pose = frame.getViewerPose(space);
-      this.update({ cameraFrames: cameraFrameStatus(session, pose?.views) });
       const tracked = !!pose && !pose.emulatedPosition && session.visibilityState === 'visible';
-      this.update({ tracking: !pose ? 'Lost; move slowly to recover' : pose.emulatedPosition ? 'Limited; position is emulated' : session.visibilityState !== 'visible' ? 'Paused; session not visible' : 'Tracking' });
+      const tracking = !pose ? 'Lost; move slowly to recover' : pose.emulatedPosition ? 'Limited; position is emulated' : session.visibilityState !== 'visible' ? 'Paused; session not visible' : 'Tracking';
+      if (this.status.tracking !== tracking) this.update({ tracking });
       world.marker.visible = tracked && this.placed;
       world.leftBase.visible = tracked && !!this.leftPoint && !this.placed;
       world.reticle.visible = false;
-      if (!tracked && this.hitSource) this.update({ hitTest: 'Paused; waiting for positional tracking' });
+      if (!tracked && this.hitSource && this.status.hitTest !== 'Paused; waiting for positional tracking') this.update({ hitTest: 'Paused; waiting for positional tracking', surfaceReady: false });
       if (tracked && this.anchor) {
         const anchorPose = frame.getPose(this.anchor.anchorSpace, space);
         world.marker.visible = !!anchorPose;
-        if (anchorPose) { this.placementBase.fromArray(anchorPose.transform.matrix); world.marker.matrix.copy(this.placementBase); this.update({ anchors: 'Tracking anchor' }); }
-        else this.update({ anchors: 'Anchor pose unavailable; marker hidden' });
+        const anchorStatus = anchorPose ? 'Tracking anchor' : 'Anchor pose unavailable; marker hidden';
+        if (anchorPose) { this.placementBase.fromArray(anchorPose.transform.matrix); world.marker.matrix.copy(this.placementBase); }
+        if (this.status.anchors !== anchorStatus) this.update({ anchors: anchorStatus });
       }
       let hit: XRHitTestResult | undefined;
       let hitPose: XRPose | null = null;
-      if (tracked && this.hitSource && !this.placed) {
-        hit = frame.getHitTestResults(this.hitSource)[0];
-        hitPose = hit?.getPose(space) ?? null;
-        if (time - this.lastHitReport >= 150 || this.placeQueued) {
-          this.lastHitReport = time;
-          this.update({ hitTest: hitPose ? 'Surface found' : 'Scanning; no surface yet' });
+      if (tracked && this.hitSource && (!this.placed || !this.status.locked)) {
+        const results = frame.getHitTestResults(this.hitSource);
+        // A first result can be unlocatable in this reference space. Try the next
+        // real result, without inventing a pose or carrying one across frames.
+        for (let i = 0; i < results.length && i < 4; i++) {
+          const candidate = results[i]!.getPose(space);
+          if (candidate && !candidate.emulatedPosition) { hit = results[i]; hitPose = candidate; break; }
         }
-        if (hitPose && !this.placed) {
+        const nextHit = hitPose ? 'Surface found' : 'Scanning; no surface yet';
+        if (this.status.hitTest !== nextHit || this.status.surfaceReady !== !!hitPose) this.update({ hitTest: nextHit, surfaceReady: !!hitPose });
+        this.profiler?.recordHit(!!hitPose);
+        if (hitPose) {
           world.reticle.matrix.fromArray(hitPose.transform.matrix);
           world.reticle.visible = true;
+          this.profiler?.recordReticle();
+          if (this.singlePoint && !this.placed && world.gateReady && pose) {
+            this.uprightFromHit(hitPose, pose);
+            world.marker.matrix.copy(adjustedGateMatrix(this.hitMatrix, this.previewBasis, this.calibration, this.gateTarget));
+            world.marker.visible = true;
+          }
         }
       }
-      if (tracked && this.hitSource && this.placed) this.update({ hitTest: 'Paused after placement; Reposition to scan again' });
+      if (tracked && this.hitSource && this.placed && this.status.locked && this.status.hitTest !== 'Paused after placement; Reposition to scan again') this.update({ hitTest: 'Paused after placement; Reposition to scan again', surfaceReady: false });
       if (this.placeQueued) {
         this.placeQueued = false;
         const manual = this.manualQueued;
@@ -264,7 +317,12 @@ export class XRSessionController {
         else if (pose) {
           const position = new Vector3(0, 0, -1.5).applyMatrix4(new Matrix4().fromArray(pose.transform.matrix));
           const matrix = hitPose ? new Matrix4().fromArray(hitPose.transform.matrix) : new Matrix4().makeTranslation(position.x, position.y, position.z);
-          if (this.isGate && !this.gateImage) this.update({ message: 'Load a gate image before calibrating.' });
+          if (this.isGate && (!this.gateImage || !world.gateReady)) this.update({ message: 'Load a gate image before calibrating.' });
+          else if (this.singlePoint && hitPose) {
+            this.uprightFromHit(hitPose, pose); this.gateBasis.copy(this.previewBasis);
+            this.update({ calibration: 'Surface position captured; verify size and direction in Fine Tune' });
+            this.place(frame, matrix, hit, hitPose);
+          }
           else if (this.isGate && hitPose) this.captureEntrance(frame, matrix, hit, hitPose);
           else {
             if (this.isGate) {
@@ -288,13 +346,24 @@ export class XRSessionController {
         if (!world.marker.visible) this.poseFilter.reset();
       }
       renderer.render(world.scene, world.camera);
-      const profile = this.profiler.sample(time, performance.now() - cpuStart, renderer.info);
-      if (profile) this.update({ profile });
+      if (this.profiler) {
+        const profile = this.profiler.sample(time, performance.now() - cpuStart, renderer.info);
+        if (profile) { const counts = xrResourceCounts(); profile.activeSessions = counts.sessions; profile.activeHitSources = counts.hitSources; this.update({ profile }); }
+      }
     } catch (error) {
       const message = sessionError(error);
       void this.exit().then(() => { if (!this.session) this.update({ session: 'error', message }); });
     }
   };
+
+  private uprightFromHit(hit: XRPose, viewer: XRViewerPose) {
+    this.hitMatrix.fromArray(hit.transform.matrix); this.viewerMatrix.fromArray(viewer.transform.matrix);
+    this.hitPosition.setFromMatrixPosition(this.hitMatrix); this.viewerPosition.setFromMatrixPosition(this.viewerMatrix);
+    const dx = this.viewerPosition.x - this.hitPosition.x, dz = this.viewerPosition.z - this.hitPosition.z;
+    const yaw = dx * dx + dz * dz > .0001 ? Math.atan2(dx, dz) : Math.atan2(this.viewerMatrix.elements[8]!, this.viewerMatrix.elements[10]!);
+    this.upright.makeRotationY(yaw).setPosition(this.hitPosition);
+    this.previewBasis.copy(this.hitMatrix).invert().multiply(this.upright);
+  }
 
   private captureEntrance(frame: XRFrame, matrix: Matrix4, hit: XRHitTestResult | undefined, pose: XRPose) {
     const point = new Vector3().setFromMatrixPosition(matrix);
@@ -329,6 +398,7 @@ export class XRSessionController {
     world.reticle.visible = false;
     world.leftBase.visible = false;
     const version = ++this.placementVersion;
+    if (this.singlePoint) this.update({ locked: true, surfaceReady: false });
     this.update({ placement: pose ? 'Placed on surface' : 'Placed 1.5 m ahead (no surface alignment)', message: this.isGate ? (pose ? 'Gate positioned. Fine-tune measured dimensions, offsets and yaw from multiple viewpoints, then lock. Physical behavior UNVERIFIED.' : 'Approximate gate placed once 1.5 m ahead at camera height. Lower its base and adjust depth/rotation in Gate calibration & image. Check both pillars from the side, then lock. No surface depth was measured; physical behavior UNVERIFIED.') : 'Walk sideways and closer: the orange marker should stay in the world. Tap again to reset. Physical behavior UNVERIFIED.' });
     try {
       // Invoke anchor creation during the active XR frame, not in a later promise.
@@ -372,17 +442,17 @@ export class XRSessionController {
     this.leftPoint = null;
     this.gateBasis.identity();
     this.poseFilter.reset();
-    this.lastHitReport = -Infinity;
     if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
-    this.update({ placement: 'Not placed', locked: false, baseline: null, calibration: 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
+    this.update({ placement: 'Not placed', locked: false, surfaceReady: false, baseline: null, calibration: this.singlePoint ? 'Aim at entrance ground centre' : 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
   };
 
-  private onSelect = () => { if (this.status.locked) return; if (this.placed) { if (!this.isGate) this.reset(); } else this.queuePlacement(); };
+  private onSelect = () => { if (this.status.locked || (this.singlePoint && this.session?.domOverlayState)) return; if (this.placed) { if (!this.isGate) this.reset(); } else this.queuePlacement(); };
   private onBeforeXRSelect = (event: Event) => { if ((event.target as Element | null)?.closest('button,input,select,label,details,summary,a,.xr-control-card')) event.preventDefault(); };
   private onVisibility = () => {
     this.placeQueued = false; this.manualQueued = false;
+    this.update({ surfaceReady: false });
     if (this.session?.visibilityState !== 'visible') {
-      this.poseFilter.reset(); this.profiler.reset();
+      this.poseFilter.reset(); this.profiler?.reset();
       if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
       this.update({ tracking: 'Paused; session not visible' });
     }
@@ -427,7 +497,7 @@ export class XRSessionController {
     this.options.overlay.removeEventListener('beforexrselect', this.onBeforeXRSelect);
     delete this.options.overlay.dataset.xrActive;
     window.removeEventListener('pagehide', this.onPageHide);
-    this.hitSource?.cancel(); this.hitSource = null;
+    if (this.hitSource) releaseHitSource(this.hitSource); this.hitSource = null;
     this.anchor?.delete(); this.anchor = null;
     this.renderer?.setAnimationLoop(null);
     if (this.renderer) {
@@ -439,8 +509,8 @@ export class XRSessionController {
     this.world = null; this.renderer = null; this.session = null; this.referenceSpace = null;
     this.placed = false; this.placeQueued = false; this.manualQueued = false;
     this.leftPoint = null;
-    this.poseFilter.reset(); this.profiler.reset();
-    this.update({ locked: false, baseline: null, calibration: 'Capture left pillar base' });
+    this.poseFilter.reset(); this.profiler?.reset();
+    this.update({ locked: false, surfaceReady: false, gateReady: false, profile: null, baseline: null, calibration: 'Capture left pillar base' });
   }
 
   dispose() {

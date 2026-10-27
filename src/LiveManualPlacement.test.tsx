@@ -11,7 +11,7 @@ vi.mock('./gates/GateProvider', () => ({ useGateLibrary: () => ({
   loading: false, error: '', load: vi.fn(),
 }) }));
 vi.mock('./xr/useXRSession', () => ({ useXRSession: () => ({
-  status: { ...initialXRStatus, session: 'running', hitTest: 'Scanning; no surface yet' },
+  status: { ...initialXRStatus, session: 'running', tracking: 'Tracking', hitTest: 'Scanning; no surface yet' },
   hostRef: { current: null }, overlayRef: { current: null }, mode: 'gate', setMode: vi.fn(),
   calibration: defaultCalibration, configure: vi.fn(), presentation: defaultPresentation, present: vi.fn(),
   horizontal: vi.fn(), start: vi.fn(), place: vi.fn(), placeManual: manual,

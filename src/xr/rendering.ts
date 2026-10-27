@@ -42,6 +42,30 @@ export function createTestScene() {
   let presentation: GatePresentation = { ...defaultPresentation };
   let configuration: GateCalibration | null = null;
   let gateEnabled = false;
+  let requestedImage: GateImage | null = null;
+  let imageVersion = 0;
+  let ownedBitmap: ImageBitmap | null = null;
+  function commitImage(next: GateImage, source: HTMLImageElement | HTMLCanvasElement | ImageBitmap, bitmap: ImageBitmap | null = null) {
+    const replacement = new Texture(source);
+    replacement.generateMipmaps = false; replacement.minFilter = LinearFilter;
+    replacement.colorSpace = SRGBColorSpace;
+    replacement.flipY = !bitmap; // ImageBitmap was explicitly flipped during worker-backed resize.
+    replacement.needsUpdate = true;
+    const hadMap = !!gateMaterial.map;
+    gateMaterial.map = replacement;
+    if (!hadMap) gateMaterial.needsUpdate = true;
+    texture?.dispose(); ownedBitmap?.close(); ownedBitmap = bitmap;
+    texture = replacement; image = next; updateGate();
+  }
+  function fallbackImage(next: GateImage) {
+    const longest = Math.max(next.asset.widthPixels, next.asset.heightPixels);
+    if (longest <= 2048) { commitImage(next, next.image); return; }
+    const canvas = document.createElement('canvas'), ratio = 2048 / longest;
+    canvas.width = Math.max(1, Math.round(next.asset.widthPixels * ratio)); canvas.height = Math.max(1, Math.round(next.asset.heightPixels * ratio));
+    const context = canvas.getContext('2d');
+    if (context) { context.drawImage(next.image, 0, 0, canvas.width, canvas.height); commitImage(next, canvas); }
+    // Keep the previous texture if no bounded resize path is available.
+  }
   function updateGate() {
     cube.visible = !gateEnabled;
     gate.visible = gateEnabled && !!texture && !presentation.before;
@@ -70,39 +94,30 @@ export function createTestScene() {
   scene.add(marker, reticle, leftBase);
   return {
     scene, camera, marker, reticle, leftBase,
+    get gateReady() { return !!texture && image === requestedImage; },
     setGateImage(next: GateImage) {
-      if (image === next) return;
-      let source: HTMLImageElement | HTMLCanvasElement = next.image;
+      if (requestedImage === next) return;
+      requestedImage = next;
+      const version = ++imageVersion;
       const longest = Math.max(next.asset.widthPixels, next.asset.heightPixels);
-      if (longest > 2048) {
-        const canvas = document.createElement('canvas');
+      if (longest > 2048 && typeof createImageBitmap === 'function') {
         const ratio = 2048 / longest;
-        canvas.width = Math.max(1, Math.round(next.asset.widthPixels * ratio));
-        canvas.height = Math.max(1, Math.round(next.asset.heightPixels * ratio));
-        const context = canvas.getContext('2d');
-        if (context) { context.drawImage(next.image, 0, 0, canvas.width, canvas.height); source = canvas; }
+        return createImageBitmap(next.image, { resizeWidth: Math.max(1, Math.round(next.asset.widthPixels * ratio)), resizeHeight: Math.max(1, Math.round(next.asset.heightPixels * ratio)), resizeQuality: 'medium', imageOrientation: 'flipY', premultiplyAlpha: 'none' })
+          .then((bitmap) => { if (version !== imageVersion) { bitmap.close(); return; } commitImage(next, bitmap, bitmap); })
+          .catch(() => { if (version === imageVersion) fallbackImage(next); });
       }
-      const replacement = new Texture(source);
-      replacement.generateMipmaps = false;
-      replacement.minFilter = LinearFilter;
-      replacement.colorSpace = SRGBColorSpace;
-      // HTMLImageElement source + standard PlaneGeometry UVs: top stays up.
-      replacement.flipY = true;
-      replacement.needsUpdate = true;
-      gateMaterial.map = replacement;
-      gateMaterial.needsUpdate = true;
-      texture?.dispose(); texture = replacement; image = next;
-      updateGate();
+      fallbackImage(next);
     },
     configureGate(config: GateCalibration, enabled: boolean) {
       configuration = config; gateEnabled = enabled; updateGate();
     },
     setPresentation(next: GatePresentation) { presentation = next; updateGate(); },
     dispose() {
+      ++imageVersion; requestedImage = null;
       scene.clear();
       cubeGeometry.dispose(); cubeMaterial.dispose();
       ringGeometry.dispose(); ringMaterial.dispose(); leftMaterial.dispose();
-      gateGeometry.dispose(); gateMaterial.dispose(); texture?.dispose(); texture = null;
+      gateGeometry.dispose(); gateMaterial.dispose(); texture?.dispose(); texture = null; ownedBitmap?.close(); ownedBitmap = null;
     },
   };
 }

@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { checking, detectBrowserCapability } from './capabilities/detect';
 import type { CapabilityResult } from './capabilities/detect';
-import { GatePreview } from './preview/GatePreview';
 import { CapabilityPanel } from './ui/CapabilityPanel';
 import { useXRSession } from './xr/useXRSession';
 import { useGateLibrary } from './gates/GateProvider';
@@ -9,18 +8,23 @@ import { GateControls } from './ui/GateControls';
 import { OpeningDetection } from './detection/OpeningDetection';
 import type { ConfirmedOpening } from './detection/types';
 import { PresentationControls } from './ui/PresentationControls';
-import { LiveGateSetup } from './ui/LiveGateSetup';
 import { PlacementGuide } from './ui/PlacementGuide';
+import { XRDiagnostics } from './ui/XRDiagnostics';
 
 export default function LivePreview({ onActiveChange }: { onActiveChange?: (active: boolean) => void }) {
   const [result, setResult] = useState<CapabilityResult>(checking);
   const [attempt, setAttempt] = useState(0);
   const [opening, setOpening] = useState<ConfirmedOpening | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
-  const { gate, loading, error, load } = useGateLibrary();
-  const { status, hostRef, overlayRef, mode, setMode, calibration, configure, presentation, present, horizontal, start, place, undoLeft, placeManual, reset, reposition, lock, exit } = useXRSession(gate);
+  const [fineTune, setFineTune] = useState(false);
   const [manualReview, setManualReview] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const { gate, loading, error, load } = useGateLibrary();
+  const { status, hostRef, overlayRef, mode, setMode, placementMethod = 'single-point', chooseMethod, calibration, configure, presentation, present, horizontal, start, place, undoLeft, placeManual, reset, reposition, lock, exit } = useXRSession(gate);
   const busy = ['requesting', 'starting', 'running', 'ending'].includes(status.session);
+  const placed = status.placement !== 'Not placed';
+  const ready = status.session === 'running' && status.surfaceReady && status.tracking === 'Tracking' && !!gate && status.gateReady && !loading;
+  const trackingLabel = placed && status.tracking === 'Tracking' && status.anchors !== 'Anchor pose unavailable; marker hidden' ? 'Gate Placed' : ready ? 'Ready to Place' : 'Finding Surface';
   const needsAttention = status.session === 'error' || /distinct RIGHT|25 cm|Placement paused|No surface at|reference space reset|Could not|WebGL context lost/.test(status.message);
   useEffect(() => { onActiveChange?.(busy); return () => { onActiveChange?.(false); }; }, [busy, onActiveChange]);
   useEffect(() => {
@@ -37,61 +41,49 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
     }
   }
   return <div className="live-workspace">
-    <div hidden={busy}>
-    <div className="page-intro simple-intro"><h1>Live Camera AR</h1><p>Choose a gate. Open the camera. Place it at your entrance.</p></div>
-    <LiveGateSetup gate={gate} loading={loading} error={error} busy={busy} onImage={load} calibration={calibration} onCalibration={configure} />
-    <CapabilityPanel result={result} onRetry={retry} onStart={start} busy={busy || photoBusy || loading || (mode === 'gate' && !gate)} />
-    <details className="simple-options"><summary>See selected gate</summary><GatePreview gate={gate} /></details>
-    {result.status === 'insecure' && <section className="live-connection-help" aria-labelledby="phone-connection-title"><h2 id="phone-connection-title">Your phone needs a secure connection for live AR.</h2><p>A Wi-Fi link beginning <code>http://192.168…</code> can show this website, but Chrome will not enable tracked AR there. Use trusted HTTPS, or connect your Android phone by USB and forward port 5173 in desktop Chrome’s <code>chrome://inspect/#devices</code>.</p><p>With USB forwarding enabled, open <strong>http://localhost:5173/#/live</strong> on the phone. The localhost exception works only when the phone’s port is actually forwarded to this computer.</p><a className="text-link" href="https://developers.google.com/ar/develop/webxr/requirements" target="_blank" rel="noopener noreferrer">Android live AR connection instructions ↗</a></section>}
-    <details className="optional-photo-tools"><summary>Auto-detect opening points & confirm all four</summary><p className="fine-print">Optional photo preparation. Confirmed corners still need real AR base points for world placement.</p><OpeningDetection arActive={busy} locked={status.locked} onBusy={setPhotoBusy} onConfirm={confirmOpening} /></details>
-    </div>
+    <output hidden data-testid="debug-capability">{result.status}</output>
+    {!busy && <div>
+      <div className="page-intro simple-intro"><h1>Live Camera AR</h1><p>Open the camera. Choose a gate. Aim and place.</p></div>
+      <CapabilityPanel result={result} onRetry={retry} onStart={start} busy={busy || photoBusy} />
+      {result.status === 'insecure' && <p className="form-error">Open this site over trusted HTTPS on your phone. A computer's HTTP Wi-Fi address cannot start tracked AR.</p>}
+    </div>}
     <div ref={hostRef} className="xr-canvas-host" />
-    <section ref={overlayRef} className="xr-controls panel mt-5 p-5" aria-labelledby="debug-title">
-      <div className="xr-control-card" hidden={!busy && status.session !== 'error' && status.session !== 'ended'}>
-      <h2 id="debug-title">Your live preview</h2>
-      {mode === 'gate' && <PlacementGuide status={status} hasGate={!!gate} onCapture={place} onUndo={undoLeft} />}
-      <p className="text-sm font-semibold">{status.session === 'running' ? `Tracking: ${status.tracking}` : status.session === 'error' ? 'Camera could not start' : ''}</p>
-      {needsAttention && <p role="alert" className="form-error">{status.message}</p>}
-      {mode === 'gate' && status.session === 'running' && status.placement !== 'Not placed' && <p className="live-placement-prompt">Check the fit, then lock your gate.</p>}
-      <div className="simple-camera-actions">
-        {mode === 'gate' && status.session === 'running' && status.placement === 'Not placed' && <button className="action" disabled={!gate} onClick={() => setManualReview(true)}>No surface? Place manually</button>}
-        {mode === 'marker' && <button className="action" disabled={status.session !== 'running' || status.placement !== 'Not placed'} onClick={place}>Place marker</button>}
-        {mode === 'gate' && status.session === 'running' && status.placement !== 'Not placed' && <><button className="action" disabled={status.locked} onClick={reposition}>Reposition</button><button className="action" onClick={lock}>{status.locked ? 'Unlock Placement' : 'Lock Placement'}</button></>}
-        <button className="action" disabled={!['starting', 'running'].includes(status.session)} onClick={exit}>Exit AR</button>
+    <section ref={overlayRef} className="xr-controls panel mt-5 p-5 xr-customer-controls" aria-label="Live gate controls">
+      {busy && <header className="xr-overlay-header"><span role="status">{trackingLabel}</span><button className="action" aria-label="Exit AR" onClick={exit}>Close</button></header>}
+      <div className="xr-control-card">
+        {needsAttention && <p role="alert" className="form-error">{status.message}</p>}
+        {busy && !placed && <p className="xr-guidance">{!gate ? 'Select your gate to begin.' : !ready ? 'Aim at the ground in the middle of the entrance. Move slowly over a textured, well-lit area.' : 'Align the preview, then tap Place Gate. Use Fine Tune for measured pillar alignment.'}</p>}
+        {busy && placed && <p className="xr-guidance">{trackingLabel === 'Gate Placed' ? 'Walk around to preview your gate.' : 'Tracking interrupted. Move slowly to recover; the gate stays hidden until its pose is valid.'}</p>}
+        {busy && <div className="xr-primary-actions">
+          <button className="action" disabled={loading} onClick={() => fileInput.current?.click()}>{placed ? 'Change Gate' : 'Select Gate'}</button>
+          {!placed && mode === 'gate' && placementMethod === 'single-point' && <button className="action xr-place-button" disabled={!ready} onClick={place}>Place Gate</button>}
+          {placed && <button className="action" onClick={reposition}>Reset</button>}
+          {mode === 'marker' && !placed && <button className="action" disabled={!ready} onClick={place}>Place marker</button>}
+        </div>}
+        {busy && mode === 'gate' && placementMethod === 'two-point' && <PlacementGuide status={status} hasGate={!!gate} onCapture={place} onUndo={undoLeft} />}
+        {busy && !placed && <label className="xr-size-control">Size<input aria-label="Size" type="range" min="0.1" max="3" step="0.01" value={calibration.scale} onChange={(event) => configure({ ...calibration, scale: event.currentTarget.valueAsNumber })} /></label>}
+        {loading && <p role="status">Preparing gate…</p>}
+        {error && <p role="alert" className="form-error">{error}</p>}
+        {!placed && status.session === 'running' && !ready && <button className="text-link" onClick={() => setManualReview(true)}>No surface? Place manually</button>}
+        {manualReview && !placed && status.session === 'running' && <div className="live-placement-prompt" role="group" aria-label="Confirm approximate placement"><p>Place once 1.5 m ahead at camera height. This does not measure the entrance depth. Align height and direction in Fine Tune.</p><button className="action" disabled={!gate || loading || status.tracking !== 'Tracking'} onClick={() => { setManualReview(false); placeManual(); }}>Confirm approximate placement</button>{' '}<button className="action" onClick={() => setManualReview(false)}>Keep scanning</button></div>}
+        <details className="simple-options xr-more" open={fineTune} onToggle={(event) => setFineTune(event.currentTarget.open)}><summary>Fine Tune</summary>
+          {fineTune && <>
+            <p className="fine-print">Size defaults are estimates. Enter measurements for accurate fitting. A ground point supplies position; it does not detect your complete entrance.</p>
+            {placed && <button className="action" onClick={lock}>{status.locked ? 'Unlock adjustments' : 'Lock adjustments'}</button>}
+            {!placed && <label className="field-label">Placement method<select value={placementMethod} onChange={(event) => chooseMethod?.(event.currentTarget.value as 'single-point' | 'two-point')}><option value="single-point">Simple — entrance centre</option><option value="two-point">Precise — left and right pillar bases</option></select></label>}
+            <div className="button-row"><button className="action" disabled={status.locked || (!ready && !placed)} onClick={() => horizontal(-.05)}>Move left</button><button className="action" disabled={status.locked || (!ready && !placed)} onClick={() => horizontal(.05)}>Move right</button><button className="action" disabled={status.locked} onClick={() => configure({ ...calibration, yaw: Math.max(-360, calibration.yaw - 5) })}>Rotate left</button><button className="action" disabled={status.locked} onClick={() => configure({ ...calibration, yaw: Math.min(360, calibration.yaw + 5) })}>Rotate right</button></div>
+            <GateControls config={calibration} onChange={configure} gate={gate} loading={loading} error="" onImage={load} locked={status.locked} baseline={status.baseline} onHorizontal={horizontal} canNudge={ready || placed} fitting={presentation.fitting} />
+            <PresentationControls gate={gate} calibration={calibration} value={presentation} onChange={present} onCatalogue={(asset) => { void load(undefined, asset); }} loading={loading} locked={status.locked} canCompare={status.session === 'running' && placed} />
+            {opening && <p className="fine-print">Photo boundaries user-confirmed ({opening.source}). Measured envelope {opening.width.toFixed(2)} × {opening.height.toFixed(2)} m was applied. Photo pixels have not supplied a world pose or depth. Use precise pillar alignment at the same entrance.</p>}
+            {!busy && <details className="optional-photo-tools"><summary>Auto-detect opening points & confirm all four</summary><OpeningDetection arActive={false} locked={status.locked} onBusy={setPhotoBusy} onConfirm={confirmOpening} /></details>}
+            {!busy && <label className="field-label">AR mode<select value={mode} onChange={(event) => setMode(event.currentTarget.value as 'gate' | 'marker')}><option value="gate">Gate</option><option value="marker">Diagnostic marker</option></select></label>}
+            <button className="text-link" onClick={reset}>Reset all settings</button>
+            <p className="fine-print">No surface: manual placement is approximate and requires positional tracking. Without DOM overlay use native XR taps; Chrome's native exit remains available. Physical-device behavior is UNVERIFIED.</p>
+            <XRDiagnostics status={status} />
+          </>}
+        </details>
       </div>
-      <details className="simple-options xr-more"><summary>Adjust gate & more</summary>
-      <details className="camera-clarity-help"><summary>Camera blurry or scanning slowly?</summary><p>Chrome/ARCore controls immersive camera focus and resolution; this page cannot force autofocus or sharpen the passthrough image. Point at a well-lit textured surface 1–2 m away and pause movement. If it stays blurry, Exit AR, close other camera apps and retry Start AR. Placement must be recaptured after restarting.</p><p>For four-point detection, exit AR and take a sharp entrance photo using the photo tool above. Never confirm points you cannot see clearly.</p><button className="action" disabled={status.session !== 'running'} onClick={exit}>Exit AR to retry camera</button></details>
-      {opening && <p className="text-sm">Photo boundaries user-confirmed ({opening.source}). Measured envelope {opening.width.toFixed(2)} × {opening.height.toFixed(2)} m was applied. Match the photo’s BL and BR to the physical LEFT and RIGHT pillar bases with XR hits. Photo pixels have not supplied a world pose or depth.</p>}
-      <label className="block text-sm font-semibold">AR mode <select className="ml-2 rounded-lg border bg-white p-2" value={mode} disabled={busy} onChange={(event) => setMode(event.currentTarget.value as 'gate' | 'marker')}><option value="gate">2D gate calibration</option><option value="marker">Stage 2 diagnostic marker</option></select></label>
-      {mode === 'gate' && <GateControls config={calibration} onChange={configure} gate={gate} loading={loading} error={error} onImage={load} locked={status.locked} baseline={status.baseline} onHorizontal={horizontal} canNudge={status.session === 'running' && status.placement !== 'Not placed'} fitting={presentation.fitting} />}
-      {mode === 'gate' && <PresentationControls gate={gate} calibration={calibration} value={presentation} onChange={present} onCatalogue={(asset) => { void load(undefined, asset); }} loading={loading} locked={status.locked} canCompare={status.session === 'running' && status.placement !== 'Not placed'} />}
-      {mode === 'gate' && <p className="text-sm font-semibold">{status.calibration} · {status.locked ? 'Locked' : 'Unlocked'}</p>}
-      <details className="session-diagnostics"><summary className="min-h-11 cursor-pointer py-3 font-semibold">Session diagnostics</summary><dl className="mt-4 grid gap-4 text-sm sm:grid-cols-3">
-        {!needsAttention && <div><dt>Session message</dt><dd>{status.message}</dd></div>}
-        <div><dt>Capability</dt><dd data-testid="debug-capability">{result.status}</dd></div>
-        <div><dt>XR session</dt><dd>{status.session}</dd></div>
-        <div><dt>Tracking</dt><dd>{status.tracking}</dd></div>
-        <div><dt>Reference space</dt><dd>{status.referenceSpace}</dd></div>
-        <div><dt>Hit test</dt><dd>{status.hitTest}</dd></div>
-        <div><dt>Anchors</dt><dd>{status.anchors}</dd></div>
-        <div><dt>DOM overlay</dt><dd>{status.overlay}</dd></div>
-        <div><dt>Placement</dt><dd>{status.placement}</dd></div>
-        <div><dt>XR camera frames</dt><dd>{status.cameraFrames}</dd></div>
-        <div><dt>Foreground occlusion</dt><dd>Off — real depth/segmentation unverified</dd></div>
-        <div><dt>XR screenshot</dt><dd>Passthrough capture unavailable; gate-only PNG export or Android controls</dd></div>
-        <div><dt>Preview</dt><dd>{presentation.before ? 'Before: gate hidden' : 'After: gate visible when tracked'}</dd></div>
-        {status.profile && <><div><dt>Last XR frame sample</dt><dd>{status.profile.fps.toFixed(1)} fps · p95 {status.profile.p95IntervalMs.toFixed(1)} ms</dd></div><div><dt>App CPU / render calls</dt><dd>{status.profile.cpuMs.toFixed(2)} ms · {status.profile.draws ?? 'unavailable'} calls</dd></div><div><dt>Renderer resource counts</dt><dd>{status.profile.geometries ?? '?'} geometries · {status.profile.textures ?? '?'} textures</dd></div></>}
-      </dl></details>
-      <button className="action" disabled={status.session !== 'running'} onClick={reset}>Reset</button>
-      </details>
-      {manualReview && status.session === 'running' && status.placement === 'Not placed' && <div className="live-placement-prompt" role="group" aria-label="Confirm approximate placement">
-        <p>This places the gate once, 1.5 m ahead at camera height, using real XR tracking. It does not measure the entrance depth. You must lower and align it using the calibration controls, then check from the side. Your photo points do not supply a world position.</p>
-        <button className="action" disabled={!gate} onClick={() => { setManualReview(false); placeManual(); }}>Confirm approximate placement</button>{' '}
-        <button className="action" onClick={() => setManualReview(false)}>Keep scanning</button>
-      </div>}
-      <details className="simple-options"><summary>Camera help</summary><p>Aim using the centre ring. Without DOM overlay, capture bases with native taps and use Chrome's native XR exit. Manual placement is approximate and needs height/depth alignment.</p></details>
-      </div>
+      <input ref={fileInput} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Gate image for Live AR" disabled={loading} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void load(file); event.currentTarget.value = ''; }} />
     </section>
-    <footer className="mt-6 text-sm text-slate-600">Target: ARCore-compatible Android 12+ · Trusted HTTPS · WebXR-enabled browser. Physical-device validation: UNVERIFIED. This testing label is separate from the live tracking state.</footer>
   </div>;
 }

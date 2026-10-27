@@ -17,4 +17,13 @@ describe('bounded XR frame profiling', () => {
     const sample = profiler.sample(1016, 12)!;
     expect(sample.p95IntervalMs).toBe(1000); expect(sample.fps).toBeLessThan(3);
   });
+  it('aggregates real hit and reticle counts and uses the first XR timestamp as the report baseline', () => {
+    const p = new FrameProfiler(); p.recordHit(true); p.recordReticle();
+    expect(p.sample(50000, 1)).toBeNull();
+    p.recordHit(false); expect(p.sample(50016, 2)).toBeNull();
+    const sample = p.sample(51000, 1, undefined, 1, 1)!;
+    expect(sample.hitSuccessRate).toBe(.5); expect(sample.reticleHz).toBe(1);
+    expect(sample.activeSessions).toBe(1); expect(sample.activeHitSources).toBe(1);
+    expect(sample.intervalMs).toBe(500);
+  });
 });

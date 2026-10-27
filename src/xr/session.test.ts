@@ -14,7 +14,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker' }: { hitTest?: boolean; floor?: boolean; overlay?: boolean; mode?: 'gate' | 'marker' } = {}) {
+function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker', placementMethod = 'two-point', diagnostics = true }: { hitTest?: boolean; floor?: boolean; overlay?: boolean; mode?: 'gate' | 'marker'; placementMethod?: 'single-point' | 'two-point'; diagnostics?: boolean } = {}) {
   const space = new EventTarget() as XRReferenceSpace;
   const viewer = new EventTarget() as XRReferenceSpace;
   const source = { cancel: vi.fn() };
@@ -43,7 +43,8 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
   const overlayRoot = document.createElement('section');
   const statuses: XRStatus[] = [];
   const rendererFactory = vi.fn(() => renderer as unknown as XRRenderer);
-  const controller = new XRSessionController({ xr: { requestSession }, host, overlay: overlayRoot, onStatus: (status) => statuses.push(status), rendererFactory, mode });
+  const xr = { requestSession };
+  const controller = new XRSessionController({ xr, host, overlay: overlayRoot, onStatus: (status) => statuses.push(status), rendererFactory, mode, placementMethod, diagnostics });
   function frame({ time = 0, x = 0, hitX = 2, hitY = 0, tilt = false, hit = hitTest, tracking = true, emulated = false, anchorPose = true, createAnchor, frameAnchor }: { time?: number; x?: number; hitX?: number; hitY?: number; tilt?: boolean; hit?: boolean; tracking?: boolean; emulated?: boolean; anchorPose?: boolean; createAnchor?: () => Promise<XRAnchor>; frameAnchor?: (pose: XRRigidTransform, space: XRSpace) => Promise<XRAnchor> } = {}) {
     const hitMatrix = new Matrix4().makeTranslation(hitX, hitY, -2);
     if (tilt) hitMatrix.multiply(new Matrix4().makeRotationX(-Math.PI / 2));
@@ -60,16 +61,49 @@ function harness({ hitTest = true, floor = true, overlay = true, mode = 'marker'
     return xrFrame;
   }
   function marker(): Group { return (renderer.render.mock.lastCall?.[0] as Scene).children[0] as Group; }
-  return { controller, session, space, source, requestSession, renderer, rendererFactory, host, overlayRoot, frame, marker, statuses, status: () => statuses.at(-1) ?? initialXRStatus };
+  function reticle() { return (renderer.render.mock.lastCall?.[0] as Scene).children[1]!; }
+  return { controller, session, space, source, requestSession, xr, renderer, rendererFactory, host, overlayRoot, frame, marker, reticle, runFrame: (frame: XRFrame) => loop?.(32, frame), statuses, status: () => statuses.at(-1) ?? initialXRStatus };
 }
 
 describe('real XR session controller (mocked platform)', () => {
-  it('limits fluctuating surface status updates while still evaluating current XR hits', async () => {
+  it('uses the next valid hit when the first result has no pose in the chosen reference space', async () => {
+    const h = harness(); await h.controller.start(); const frame = h.frame({ hitX: 6 });
+    const good = frame.getHitTestResults(h.source as XRHitTestSource)[0]!;
+    vi.mocked(frame.getHitTestResults).mockReturnValue([{ getPose: () => null } as unknown as XRHitTestResult, good]);
+    h.reticle().matrix.identity(); h.runFrame(frame);
+    expect(h.reticle().matrix.elements[12]).toBe(6); expect(h.status().surfaceReady).toBe(true);
+    await h.controller.exit();
+  });
+  it('updates real reticle poses every XR frame with no interpolation and hides rather than moving on loss', async () => {
+    const h = harness({ diagnostics: false }); await h.controller.start();
+    h.frame({ time: 0, hitX: 1 }); const count = h.statuses.length;
+    h.frame({ time: 16, hitX: 3 });
+    expect(h.reticle().matrix.elements[12]).toBe(3); expect(h.reticle().visible).toBe(true);
+    expect(h.statuses).toHaveLength(count);
+    h.frame({ time: 32, hit: false });
+    expect(h.reticle().visible).toBe(false); expect(h.reticle().matrix.elements[12]).toBe(3);
+    expect(h.status().surfaceReady).toBe(false);
+    h.frame({ time: 48, hitX: -2 }); expect(h.reticle().matrix.elements[12]).toBe(-2);
+    const stableCount = h.statuses.length;
+    for (let i = 1; i <= 120; i++) h.frame({ time: 48 + i * 16, hitX: i / 10 });
+    expect(h.statuses).toHaveLength(stableCount);
+    expect(h.session.requestHitTestSource).toHaveBeenCalledOnce();
+    expect(h.status().profile).toBeNull(); await h.controller.exit();
+  });
+  it('guards the XRSystem while another controller owns its native session', async () => {
+    const h = harness(); await h.controller.start();
+    const other = new XRSessionController({ xr: h.xr, host: document.createElement('div'), overlay: document.createElement('section'), onStatus: vi.fn(), rendererFactory: h.rendererFactory });
+    await other.start(); expect(h.requestSession).toHaveBeenCalledOnce();
+    await h.controller.exit(); await other.start(); expect(h.requestSession).toHaveBeenCalledTimes(2);
+    await other.exit();
+  });
+  it('clears readiness immediately on a missed hit and does not publish unchanged frames', async () => {
     const h = harness(); await h.controller.start();
     h.frame({ time: 0, hit: true }); const count = h.statuses.length;
     const frame = h.frame({ time: 20, hit: false });
     expect(frame.getHitTestResults).toHaveBeenCalledOnce();
-    expect(h.statuses).toHaveLength(count);
+    expect(h.status().surfaceReady).toBe(false);
+    expect(h.statuses).toHaveLength(count + 1);
     h.frame({ time: 160, hit: false });
     expect(h.status().hitTest).toBe('Scanning; no surface yet');
     expect(h.statuses).toHaveLength(count + 1);
@@ -245,6 +279,7 @@ describe('real XR session controller (mocked platform)', () => {
     await vi.waitFor(() => expect(h.renderer.dispose).toHaveBeenCalledTimes(1));
     expect(h.source.cancel).toHaveBeenCalledTimes(1);
     expect(h.host.children).toHaveLength(0);
+    h.session.dispatchEvent(new Event('end')); // Browser/native exit eventually ends the platform session.
   });
 
   it('attempts to end AR on pagehide', async () => {
@@ -325,6 +360,30 @@ function gateFixture(width = 640, height = 360): GateImage {
 }
 
 describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('previews an upright single-point gate, commits once and keeps it fixed as hits/viewer move', async () => {
+    const h = harness({ mode: 'gate', placementMethod: 'single-point' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.frame({ hitX: 1, tilt: true }); expect(h.marker().visible).toBe(true);
+    expect(h.status().placement).toBe('Not placed'); expect(h.status().surfaceReady).toBe(true);
+    expect(h.marker().matrix.elements[5]).toBeCloseTo(1);
+    h.frame({ hitX: 2, time: 16 }); expect(h.marker().matrix.elements[12]).toBeCloseTo(2);
+    h.controller.queuePlacement(); h.frame({ hitX: 2, time: 32 });
+    expect(h.status().locked).toBe(true); expect(h.status().placement).toBe('Placed on surface');
+    const matrix = h.marker().matrix.clone();
+    h.frame({ hitX: 9, x: 8, time: 48 }); expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.controller.setGateImage(gateFixture(900, 1800)); h.frame({ x: 12, time: 64 });
+    expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.controller.lockPlacement(); h.frame({ hitX: 7, time: 80 });
+    expect(h.reticle().matrix.elements[12]).toBe(7); expect(h.marker().matrix.equals(matrix)).toBe(true);
+    h.frame({ tracking: false, time: 96 }); expect(h.marker().visible).toBe(false); expect(h.reticle().visible).toBe(false);
+    h.frame({ hitX: 4, time: 112 }); expect(h.marker().matrix.equals(matrix)).toBe(true);
+    await h.controller.exit();
+  });
+  it('does not show a simple gate preview or enable placement without a valid hit', async () => {
+    const h = harness({ mode: 'gate', placementMethod: 'single-point' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
+    h.frame({ hit: false }); expect(h.marker().visible).toBe(false); expect(h.status().surfaceReady).toBe(false);
+    h.controller.queuePlacement(); h.frame({ hit: false }); expect(h.status().placement).toBe('Not placed');
+    await h.controller.exit();
+  });
   it('shows the captured left point in world space and supports retaking without clearing dimensions', async () => {
     const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture());
     h.controller.setCalibration({ ...defaultCalibration, width: 4 }); await h.controller.start();
@@ -343,6 +402,7 @@ describe('Stage 3 gate placement with real spatial calibration', () => {
     const h = harness({ mode: 'gate' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
     h.controller.queuePlacement(); h.frame({ hitX: -1.5 });
     h.controller.queuePlacement(); h.frame({ hitX: 1.5 });
+    h.controller.lockPlacement();
     const placedFrame = h.frame(); expect(placedFrame.getHitTestResults).not.toHaveBeenCalled();
     h.controller.reset(); const scanningFrame = h.frame({ time: 200 });
     expect(scanningFrame.getHitTestResults).toHaveBeenCalledOnce();
