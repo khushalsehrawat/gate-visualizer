@@ -443,7 +443,7 @@ export class XRSessionController {
     this.gateBasis.identity();
     this.poseFilter.reset();
     if (this.world) { this.world.marker.visible = false; this.world.reticle.visible = false; this.world.leftBase.visible = false; }
-    this.update({ placement: 'Not placed', locked: false, surfaceReady: false, baseline: null, calibration: this.singlePoint ? 'Aim at entrance ground centre' : 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
+    this.update({ placement: 'Not placed', locked: false, surfaceReady: false, anchors: 'Waiting for placement', baseline: null, calibration: this.singlePoint ? 'Aim at entrance ground centre' : 'Capture left pillar base', message: 'Placement cleared. Scan and tap to place again. Physical behavior UNVERIFIED.' });
   };
 
   private onSelect = () => { if (this.status.locked || (this.singlePoint && this.session?.domOverlayState)) return; if (this.placed) { if (!this.isGate) this.reset(); } else this.queuePlacement(); };

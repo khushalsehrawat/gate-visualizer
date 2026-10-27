@@ -360,6 +360,18 @@ function gateFixture(width = 640, height = 360): GateImage {
 }
 
 describe('Stage 3 gate placement with real spatial calibration', () => {
+  it('does not get stuck preparing a gate when the same pending resize is applied twice', async () => {
+    const pending = deferred<ImageBitmap>(); vi.stubGlobal('createImageBitmap', vi.fn(() => pending.promise));
+    try {
+      const h = harness({ mode: 'gate', placementMethod: 'single-point' }), image = gateFixture(4096, 2048);
+      h.controller.setGateImage(image); await h.controller.start();
+      h.controller.setGateImage(image); expect(h.status().gateReady).toBe(false);
+      pending.resolve({ width: 2048, height: 1024, close: vi.fn() } as unknown as ImageBitmap);
+      await vi.waitFor(() => expect(h.status().gateReady).toBe(true));
+      h.frame(); h.controller.queuePlacement(); h.frame(); expect(h.status().placement).toBe('Placed on surface');
+      await h.controller.exit();
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('previews an upright single-point gate, commits once and keeps it fixed as hits/viewer move', async () => {
     const h = harness({ mode: 'gate', placementMethod: 'single-point' }); h.controller.setGateImage(gateFixture()); await h.controller.start();
     h.frame({ hitX: 1, tilt: true }); expect(h.marker().visible).toBe(true);

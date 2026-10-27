@@ -45,11 +45,12 @@ export function createTestScene() {
   let requestedImage: GateImage | null = null;
   let imageVersion = 0;
   let ownedBitmap: ImageBitmap | null = null;
+  let pendingImage: Promise<void> | undefined;
   function commitImage(next: GateImage, source: HTMLImageElement | HTMLCanvasElement | ImageBitmap, bitmap: ImageBitmap | null = null) {
     const replacement = new Texture(source);
     replacement.generateMipmaps = false; replacement.minFilter = LinearFilter;
     replacement.colorSpace = SRGBColorSpace;
-    replacement.flipY = !bitmap; // ImageBitmap was explicitly flipped during worker-backed resize.
+    replacement.flipY = !bitmap; // ImageBitmap was explicitly flipped during asynchronous resize.
     replacement.needsUpdate = true;
     const hadMap = !!gateMaterial.map;
     gateMaterial.map = replacement;
@@ -96,15 +97,18 @@ export function createTestScene() {
     scene, camera, marker, reticle, leftBase,
     get gateReady() { return !!texture && image === requestedImage; },
     setGateImage(next: GateImage) {
-      if (requestedImage === next) return;
+      if (requestedImage === next && (pendingImage || image === next)) return pendingImage;
       requestedImage = next;
+      pendingImage = undefined;
       const version = ++imageVersion;
       const longest = Math.max(next.asset.widthPixels, next.asset.heightPixels);
       if (longest > 2048 && typeof createImageBitmap === 'function') {
         const ratio = 2048 / longest;
-        return createImageBitmap(next.image, { resizeWidth: Math.max(1, Math.round(next.asset.widthPixels * ratio)), resizeHeight: Math.max(1, Math.round(next.asset.heightPixels * ratio)), resizeQuality: 'medium', imageOrientation: 'flipY', premultiplyAlpha: 'none' })
+        pendingImage = createImageBitmap(next.image, { resizeWidth: Math.max(1, Math.round(next.asset.widthPixels * ratio)), resizeHeight: Math.max(1, Math.round(next.asset.heightPixels * ratio)), resizeQuality: 'medium', imageOrientation: 'flipY', premultiplyAlpha: 'none' })
           .then((bitmap) => { if (version !== imageVersion) { bitmap.close(); return; } commitImage(next, bitmap, bitmap); })
-          .catch(() => { if (version === imageVersion) fallbackImage(next); });
+          .catch(() => { if (version === imageVersion) fallbackImage(next); })
+          .finally(() => { if (version === imageVersion) pendingImage = undefined; });
+        return pendingImage;
       }
       fallbackImage(next);
     },
@@ -113,7 +117,7 @@ export function createTestScene() {
     },
     setPresentation(next: GatePresentation) { presentation = next; updateGate(); },
     dispose() {
-      ++imageVersion; requestedImage = null;
+      ++imageVersion; requestedImage = null; pendingImage = undefined;
       scene.clear();
       cubeGeometry.dispose(); cubeMaterial.dispose();
       ringGeometry.dispose(); ringMaterial.dispose(); leftMaterial.dispose();

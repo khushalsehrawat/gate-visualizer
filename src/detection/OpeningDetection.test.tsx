@@ -13,6 +13,13 @@ beforeEach(() => {
 });
 function upload() { fireEvent.change(screen.getByLabelText('Take/select an entrance photo before AR'), { target: { files: [new File(['photo'], 'entrance.jpg', { type: 'image/jpeg' })] } }); }
 describe('separate photo workflow', () => {
+  it('releases the busy state when optional preparation is closed during processing', async () => {
+    const onBusy = vi.fn(), cancel = vi.fn();
+    vi.mocked(runDetection).mockReturnValue({ promise: new Promise(() => {}), cancel });
+    const { unmount } = render(<OpeningDetection arActive={false} locked={false} onBusy={onBusy} onConfirm={vi.fn()} />);
+    upload(); await waitFor(() => expect(runDetection).toHaveBeenCalled());
+    unmount(); expect(cancel).toHaveBeenCalledOnce(); expect(onBusy).toHaveBeenLastCalledWith(false);
+  });
   it('blocks camera/photo capture during immersive sessions', () => {
     render(<OpeningDetection arActive locked={false} onBusy={vi.fn()} onConfirm={vi.fn()} />);
     expect(screen.getByLabelText('Take/select an entrance photo before AR')).toBeDisabled();

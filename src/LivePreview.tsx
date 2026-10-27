@@ -37,6 +37,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
     setOpening(next);
     if (next) {
       setMode('gate');
+      chooseMethod?.('two-point');
       configure({ ...calibration, width: next.width, height: next.height, scale: 1, x: 0, z: 0, elevation: 0, yaw: 0 });
     }
   }
@@ -52,7 +53,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
       {busy && <header className="xr-overlay-header"><span role="status">{trackingLabel}</span><button className="action" aria-label="Exit AR" onClick={exit}>Close</button></header>}
       <div className="xr-control-card">
         {needsAttention && <p role="alert" className="form-error">{status.message}</p>}
-        {busy && !placed && <p className="xr-guidance">{!gate ? 'Select your gate to begin.' : !ready ? 'Aim at the ground in the middle of the entrance. Move slowly over a textured, well-lit area.' : 'Align the preview, then tap Place Gate. Use Fine Tune for measured pillar alignment.'}</p>}
+        {busy && !placed && <p className="xr-guidance">{!gate ? 'Select your gate to begin.' : loading || !status.gateReady ? 'Preparing your gate…' : !ready ? 'Aim at the ground in the middle of the entrance. Move slowly over a textured, well-lit area.' : 'Align the preview, then tap Place Gate. Use Fine Tune for measured pillar alignment.'}</p>}
         {busy && placed && <p className="xr-guidance">{trackingLabel === 'Gate Placed' ? 'Walk around to preview your gate.' : 'Tracking interrupted. Move slowly to recover; the gate stays hidden until its pose is valid.'}</p>}
         {busy && <div className="xr-primary-actions">
           <button className="action" disabled={loading} onClick={() => fileInput.current?.click()}>{placed ? 'Change Gate' : 'Select Gate'}</button>
@@ -62,7 +63,7 @@ export default function LivePreview({ onActiveChange }: { onActiveChange?: (acti
         </div>}
         {busy && mode === 'gate' && placementMethod === 'two-point' && <PlacementGuide status={status} hasGate={!!gate} onCapture={place} onUndo={undoLeft} />}
         {busy && !placed && <label className="xr-size-control">Size<input aria-label="Size" type="range" min="0.1" max="3" step="0.01" value={calibration.scale} onChange={(event) => configure({ ...calibration, scale: event.currentTarget.valueAsNumber })} /></label>}
-        {loading && <p role="status">Preparing gate…</p>}
+        {placed && (loading || (!!gate && !status.gateReady)) && <p role="status">Preparing gate…</p>}
         {error && <p role="alert" className="form-error">{error}</p>}
         {!placed && status.session === 'running' && !ready && <button className="text-link" onClick={() => setManualReview(true)}>No surface? Place manually</button>}
         {manualReview && !placed && status.session === 'running' && <div className="live-placement-prompt" role="group" aria-label="Confirm approximate placement"><p>Place once 1.5 m ahead at camera height. This does not measure the entrance depth. Align height and direction in Fine Tune.</p><button className="action" disabled={!gate || loading || status.tracking !== 'Tracking'} onClick={() => { setManualReview(false); placeManual(); }}>Confirm approximate placement</button>{' '}<button className="action" onClick={() => setManualReview(false)}>Keep scanning</button></div>}
